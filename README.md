@@ -1,71 +1,161 @@
-# thermalization-black-hole-model-with-inverted-harmonic-potential
+# Thermalization in a Black Hole Model with an Inverted Harmonic Potential
 
-WIP research code for Amigo's thesis on thermalization in a black hole model with an inverted harmonic potential.
+[![Python](https://img.shields.io/badge/python-3.11-blue?logo=python)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-All%20Rights%20Reserved-red)](#license)
+[![Jupyter](https://img.shields.io/badge/notebook-Jupyter-orange?logo=jupyter)](greens_func.ipynb)
 
-Thesis: WIP
+Research code accompanying the thesis of Amigo on thermalization in a black hole model governed by an inverted harmonic potential.
 
-## Contents
+---
 
-- `greens_func.ipynb`: numerical notebook for iterating a Green's-function-like recurrence, finding pole candidates, estimating a decay rate `gamma`, and fitting the scaling `gamma = C * a^x`.
+## Table of Contents
+
+- [Overview](#overview)
+- [Physics Background](#physics-background)
+- [Repository Structure](#repository-structure)
+- [Method](#method)
+- [Requirements & Installation](#requirements--installation)
+- [Usage](#usage)
+- [Reference Output](#reference-output)
+- [Configuration Guide](#configuration-guide)
+- [License](#license)
+
+---
+
+## Overview
+
+This project numerically investigates **thermalization** in a (1+1)-dimensional black hole toy model whose near-horizon region is approximated by an inverted harmonic potential. The central observable is a Green's-function-like quantity whose poles encode the quasinormal spectrum; the imaginary part of the leading pole defines a characteristic decay rate *γ*, which is then studied as a function of the coupling *a*.
+
+---
+
+## Physics Background
+
+Near the horizon of a black hole, the effective potential for a massless scalar field can be approximated by an inverted harmonic oscillator. This model is analytically tractable and reproduces many qualitative features of genuine black hole thermalization, including:
+
+- **Quasinormal modes**: complex-frequency resonances that govern the exponential ringdown of perturbations.
+- **Thermalization timescale**: set by the imaginary part of the lowest quasinormal frequency, *γ = −Im ω*.
+- **Coupling-law scaling**: the dependence *γ ∝ a^x* provides a diagnostic of how the coupling between the field and the inverted potential controls the rate of information loss.
+
+The recurrence relation iterated in this code is a discrete analogue of the continued-fraction representation of the retarded Green's function, evaluated on a grid in the complex frequency plane.
+
+---
+
+## Repository Structure
+
+```
+.
+├── greens_func.ipynb   # Main analysis notebook
+├── LICENSE
+└── README.md
+```
+
+### `greens_func.ipynb`
+
+A single self-contained Jupyter notebook that:
+
+1. **Configures** the numerical grid and model parameters.
+2. **Computes** the Green's-function recurrence over the complex *ω*-plane (Numba-JIT, multi-threaded).
+3. **Detects** pole candidates as prominent local maxima in log₁₀|g|.
+4. **Estimates** the decay rate *γ* from the poles with non-positive imaginary part.
+5. **Sweeps** the coupling *a* and fits the power law *γ = C · a^x*.
+
+---
 
 ## Method
 
-The notebook builds a complex initial grid
+### Recurrence iteration
+
+Starting from an initial complex frequency grid
 
 ```python
 w0_arr = np.linspace(w0_min, w0_max, n_w0) + 1j * w0_imag
 ```
 
-and iterates
+the notebook iterates the two-step map
 
-```python
-g = 1 / (1j * a * g - 1j * w)
-w = w - 1j * m
+```
+g  ←  1 / (i·a·g − i·ω)
+ω  ←  ω − i·m
 ```
 
-over the grid. The iterator is compiled with Numba and parallelized over starting `w0` values.
+for `n_step` steps. Each trajectory is independent, enabling Numba `prange` parallelism over the `n_w0` starting values.
 
-The analysis then:
+### Pole detection
 
-- plots the real part of `g` over the complex `w` plane
-- detects pole candidates as prominent local maxima in `log10(|g|)`
-- estimates a decay rate `gamma` from poles with non-positive imaginary part
-- sweeps over `a_values` and fits a power law `gamma = C * a^x`
+The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, and scanned for local maxima that stand out above a rolling background. A single `pole_sensitivity` parameter (0 = strict, 1 = permissive) controls the detection thresholds.
 
-## Requirements
+### Decay-rate estimation
 
-No environment file is currently committed. The notebook imports:
+Poles with Im ω ≤ 0 contribute exponentially decaying modes. Their imaginary parts are pooled to extract a single decay rate *γ* via a weighted least-squares exponential fit.
 
-- `numpy`
-- `matplotlib`
-- `numba`
-- `scipy`
+### Power-law fit
 
-The notebook metadata records Python `3.11.15` and a kernelspec display name of `torch`, but the code itself only uses the packages above.
+Over a sweep of *a* values the resulting *γ(a)* data are fitted in log-log space to
 
-## Running
+```
+γ = C · a^x
+```
 
-Open `greens_func.ipynb` in Jupyter and run cells from top to bottom. The cells are stateful: later analysis cells depend on variables created by earlier configuration and helper cells.
+using `scipy.optimize.curve_fit`.
 
-The default configuration is compute-heavy:
+---
 
-- `num_threads = 16`
-- `n_w0 = 5000`
-- `a_values = np.linspace(1.0, 100.0, 51)`
-- `n_step = 401`
+## Requirements & Installation
 
-For a quick exploratory run, reduce `n_w0`, `a_values`, or increase `scan_stride` in a scratch copy before running the full sweep.
+The code requires Python ≥ 3.11 and the following packages:
 
-## Current Reference Output
+| Package | Purpose |
+|---------|---------|
+| `numpy` | Array operations and grid construction |
+| `matplotlib` | Visualization |
+| `numba` | JIT compilation and multi-threaded iteration |
+| `scipy` | Peak detection and curve fitting |
 
-With the saved notebook state, the single run reports:
+Install with pip:
+
+```bash
+pip install numpy matplotlib numba scipy
+```
+
+or with conda:
+
+```bash
+conda install numpy matplotlib numba scipy
+```
+
+> **Note:** The notebook kernel metadata uses the display name `torch`, but no PyTorch dependency is required. Any Python 3.11 environment with the four packages above is sufficient.
+
+---
+
+## Usage
+
+1. **Clone** the repository and install dependencies (see above).
+2. **Launch** Jupyter:
+
+   ```bash
+   jupyter notebook greens_func.ipynb
+   # or
+   jupyter lab greens_func.ipynb
+   ```
+
+3. **Run all cells** from top to bottom (`Kernel → Restart & Run All`).
+
+   > The cells are stateful. Later analysis cells depend on variables produced by earlier configuration and computation cells, so running them out of order will raise `NameError`.
+
+---
+
+## Reference Output
+
+The following results are produced by the default configuration saved in the notebook state. They are provided as a sanity-check reference, not a formal benchmark.
+
+### Single run (`a = 1.0`)
 
 ```text
 Found 28 pole candidates
 gamma = 1.271340 +/- 0.082232
 ```
 
-The saved `a` sweep reports:
+### Coupling sweep (`a ∈ [1, 100]`, 51 points)
 
 ```text
 log-space power-law fit: gamma = 1.445093 * a^0.295870
@@ -73,10 +163,30 @@ C = 1.445093 +/- 0.030071
 x = 0.295870 +/- 0.005016
 ```
 
-These values are not yet backed by automated tests; treat them as notebook-state reference output, not a formal benchmark.
+---
+
+## Configuration Guide
+
+All tuneable parameters live in the **configuration cell** near the top of the notebook.
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `num_threads` | `16` | Numba thread count; reduce to match available CPU cores |
+| `n_w0` | `5000` | Grid density along Re ω; major cost driver |
+| `w0_min / w0_max` | `−5 / 5` | Real-axis scan range |
+| `w0_imag` | `10.0` | Imaginary offset of the initial grid |
+| `a_values` | `linspace(1, 100, 51)` | Coupling values for the parameter sweep |
+| `m` | `0.05` | Imaginary step per iteration |
+| `iter_range` | `20` | Total imaginary range traversed (`n_step = iter_range/m + 1`) |
+| `pole_sensitivity` | `0.01` | Pole-detection permissiveness (0 = strict, 1 = sensitive) |
+| `scan_stride` | `10` | Subsampling factor for the `a`-sweep (higher = faster) |
+
+**For a quick exploratory run**, reduce `n_w0` to ~500 and set `a_values = np.linspace(1.0, 10.0, 5)` in a scratch copy before running the full production sweep.
+
+---
 
 ## License
 
-Copyright (c) 2026 yygarypeng and Amigo. All rights reserved.
+Copyright © 2026 yygarypeng and Amigo. All rights reserved.
 
-See `LICENSE` for the full terms.
+See [`LICENSE`](LICENSE) for the full terms.
