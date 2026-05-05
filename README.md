@@ -10,8 +10,6 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Physics Background](#physics-background)
 - [Repository Structure](#repository-structure)
 - [Method](#method)
 - [Requirements & Installation](#requirements--installation)
@@ -22,21 +20,7 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
 
 ---
 
-## Overview
-
-This project numerically investigates **thermalization** in a (1+1)-dimensional black hole toy model whose near-horizon region is approximated by an inverted harmonic potential. The central observable is a Green's-function-like quantity whose poles encode the quasinormal spectrum; the imaginary part of the leading pole defines a characteristic decay rate *γ*, which is then studied as a function of the coupling *a*.
-
----
-
-## Physics Background
-
-Near the horizon of a black hole, the effective potential for a massless scalar field can be approximated by an inverted harmonic oscillator. This model is analytically tractable and reproduces many qualitative features of genuine black hole thermalization, including:
-
-- **Quasinormal modes**: complex-frequency resonances that govern the exponential ringdown of perturbations.
-- **Thermalization timescale**: set by the imaginary part of the lowest quasinormal frequency, *γ = −Im ω*.
-- **Coupling-law scaling**: the dependence *γ ∝ a^x* provides a diagnostic of how the coupling between the field and the inverted potential controls the rate of information loss.
-
-The recurrence relation iterated in this code is a discrete analogue of the continued-fraction representation of the retarded Green's function, evaluated on a grid in the complex frequency plane.
+> **🚧 Work in Progress** — This repository accompanies an ongoing thesis. Details on the overview and physics background will be added as the work progresses.
 
 ---
 
