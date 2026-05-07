@@ -37,10 +37,10 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
 
 A single self-contained Jupyter notebook that:
 
-1. **Configures** the numerical grid and model parameters.
+1. **Configures** a dense complex-frequency grid and model/runtime parameters.
 2. **Computes** the Green's-function recurrence over the complex *ω*-plane (Numba-JIT, multi-threaded).
-3. **Detects** pole candidates as prominent local maxima in log₁₀|g|.
-4. **Estimates** the decay rate *γ* from the poles with non-positive imaginary part.
+3. **Detects** pole candidates as prominent local maxima in log₁₀|g| with adaptive thresholds.
+4. **Estimates** the decay rate *γ* from poles with sufficiently negative imaginary part.
 5. **Sweeps** the coupling *a* and fits the power law *γ = C · a^x*.
 
 ---
@@ -49,28 +49,38 @@ A single self-contained Jupyter notebook that:
 
 ### Recurrence iteration
 
-Starting from an initial complex frequency grid
+Starting from a flattened set of starting lines in the complex-frequency plane,
 
 ```python
-w0_arr = np.linspace(w0_min, w0_max, n_w0) + 1j * w0_imag
+w0_real_arr = np.linspace(w0_min, w0_max, n_w0)
+w0_imag_values = np.linspace(10.0, 10.1, 50)
+w0_arr = (w0_real_arr[None, :] + 1j * w0_imag_values[:, None]).ravel()
 ```
 
 the notebook iterates the two-step map
 
 ```
-g  ←  1 / (i·a·g − i·ω)
+g0 ← i / (ω + i·eps)
+g  ← 1 / (i·a·g − i·ω)
 ω  ←  ω − i·m
 ```
 
-for `n_step` steps. Each trajectory is independent, enabling Numba `prange` parallelism over the `n_w0` starting values.
+for `n_step` steps. Each trajectory is independent, enabling Numba `prange` parallelism over all starting values in `w0_arr`.
 
 ### Pole detection
 
-The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, and scanned for local maxima that stand out above a rolling background. A single `pole_sensitivity` parameter (0 = strict, 1 = permissive) controls the detection thresholds.
+The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, then filtered with:
+
+- a local-maximum mask (`maximum_filter`)
+- a local background estimate (`median_filter`)
+- percentile-based strength/prominence thresholds
+- a minimum complex-plane separation between retained peaks
+
+A single `pole_sensitivity` parameter (0 = strict, 1 = permissive) maps to the detection configuration.
 
 ### Decay-rate estimation
 
-Poles with Im ω ≤ 0 contribute exponentially decaying modes. Their imaginary parts are pooled to extract a single decay rate *γ* via a weighted least-squares exponential fit.
+Poles with Im ω < `tor` (default `-1e-2`) contribute exponentially decaying modes. Their imaginary parts are pooled into a summed decay curve and fitted to an exponential via `scipy.optimize.curve_fit` to extract *γ*.
 
 ### Power-law fit
 
@@ -132,19 +142,26 @@ conda install numpy matplotlib numba scipy
 
 The following results are produced by the default configuration saved in the notebook state. They are provided as a sanity-check reference, not a formal benchmark.
 
-### Single run (`a = 1.0`)
+### Representative runs (selected `a` values)
 
 ```text
-Found 28 pole candidates
-gamma = 1.271340 +/- 0.082232
+a = 0.1: found 11 pole candidates
+a = 1: found 23 pole candidates
+a = 10: found 58 pole candidates
 ```
 
-### Coupling sweep (`a ∈ [1, 100]`, 51 points)
+### Decay fit (`a = 10.0`)
 
 ```text
-log-space power-law fit: gamma = 1.445093 * a^0.295870
-C = 1.445093 +/- 0.030071
-x = 0.295870 +/- 0.005016
+gamma = 2.767641 +/- 0.067101
+```
+
+### Coupling sweep (`a ∈ [0.1, 10.0]`, 50 points; `scan_stride = 10`)
+
+```text
+log-space power-law fit: gamma = 0.971582 * a^0.449186
+C = 0.971582 +/- 0.011287
+x = 0.449186 +/- 0.006659
 ```
 
 ---
@@ -155,17 +172,20 @@ All tuneable parameters live in the **configuration cell** near the top of the n
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `num_threads` | `16` | Numba thread count; reduce to match available CPU cores |
-| `n_w0` | `5000` | Grid density along Re ω; major cost driver |
-| `w0_min / w0_max` | `−5 / 5` | Real-axis scan range |
-| `w0_imag` | `10.0` | Imaginary offset of the initial grid |
-| `a_values` | `linspace(1, 100, 51)` | Coupling values for the parameter sweep |
+| `num_threads` | `32` | Numba thread count; reduce to match available CPU cores |
+| `n_w0` | `5000` | Grid density along Re ω (per starting line); major cost driver |
+| `w0_min / w0_max` | `−10 / 10` | Real-axis scan range |
+| `w0_imag_values` | `linspace(10.0, 10.1, 50)` | Imaginary offsets for starting lines |
+| `a_values` | `linspace(0.1, 10.0, 50)` | Coupling values for the sweep |
+| `selected_a_values` | `[0.1, 1.0, 10.0]` | Representative couplings for 2D plots |
 | `m` | `0.05` | Imaginary step per iteration |
 | `iter_range` | `20` | Total imaginary range traversed (`n_step = iter_range/m + 1`) |
-| `pole_sensitivity` | `0.01` | Pole-detection permissiveness (0 = strict, 1 = sensitive) |
+| `pole_sensitivity` | `0.2` | Pole-detection permissiveness (0 = strict, 1 = sensitive) |
+| `denom_floor` | `1e-16` | Early-stop threshold for near-singular recurrence denominator |
+| `g_abs_max` | `1e16` | Early-stop threshold for runaway `|g|` values |
 | `scan_stride` | `10` | Subsampling factor for the `a`-sweep (higher = faster) |
 
-**For a quick exploratory run**, reduce `n_w0` to ~500 and set `a_values = np.linspace(1.0, 10.0, 5)` in a scratch copy before running the full production sweep.
+**For a quick exploratory run**, reduce `n_w0` and/or the number of `w0_imag_values`, and use fewer `a_values` before running the full sweep.
 
 ---
 
