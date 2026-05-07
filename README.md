@@ -80,7 +80,7 @@ A single `pole_sensitivity` parameter (0 = strict, 1 = permissive) maps to the d
 
 ### Decay-rate estimation
 
-Poles with Im ω below an imaginary cutoff (named `tor` in the notebook, default `-1e-2`) contribute exponentially decaying modes. Their imaginary parts are pooled into a summed decay curve and fitted to an exponential via `scipy.optimize.curve_fit` to extract *γ*.
+Poles with Im ω below the default cutoff `-1e-2` contribute exponentially decaying modes. Their imaginary parts are pooled into a summed decay curve and fitted to an exponential via `scipy.optimize.curve_fit` to extract *γ*.
 
 ### Power-law fit
 
@@ -175,7 +175,7 @@ All tuneable parameters live in the **configuration cell** near the top of the n
 | `num_threads` | `32` | Numba thread count; reduce to match available CPU cores |
 | `n_w0` | `5000` | Grid density along Re ω (per starting line); major cost driver |
 | `w0_min / w0_max` | `−10 / 10` | Real-axis scan range |
-| `w0_imag_values` | `linspace(10.0, 10.1, 50)` | Imaginary offsets for starting lines |
+| `w0_imag_values` | `linspace(10.0, 10.1, 50)` | Defines 50 parallel starting lines in the complex plane at different imaginary offsets |
 | `a_values` | `linspace(0.1, 10.0, 50)` | Coupling values for the sweep |
 | `selected_a_values` | `[0.1, 1.0, 10.0]` | Representative couplings for 2D plots |
 | `m` | `0.05` | Imaginary step per iteration |
