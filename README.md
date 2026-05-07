@@ -80,7 +80,7 @@ A single `pole_sensitivity` parameter (0 = strict, 1 = permissive) maps to the d
 
 ### Decay-rate estimation
 
-Poles with Im ω below the cutoff `tor` (imaginary threshold, default `-1e-2`) contribute exponentially decaying modes. Their imaginary parts are pooled into a summed decay curve and fitted to an exponential via `scipy.optimize.curve_fit` to extract *γ*.
+Poles with Im ω below an imaginary cutoff (named `tor` in the notebook, default `-1e-2`) contribute exponentially decaying modes. Their imaginary parts are pooled into a summed decay curve and fitted to an exponential via `scipy.optimize.curve_fit` to extract *γ*.
 
 ### Power-law fit
 
