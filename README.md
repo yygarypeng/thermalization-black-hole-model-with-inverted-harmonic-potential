@@ -40,8 +40,8 @@ A single self-contained Jupyter notebook that:
 1. **Configures** a dense complex-frequency grid and model/runtime parameters.
 2. **Computes** the Green's-function recurrence over the complex *ω*-plane (Numba-JIT, multi-threaded).
 3. **Detects** pole candidates as prominent local maxima in log₁₀|g| with adaptive thresholds.
-4. **Estimates** the decay rate *γ* from poles with sufficiently negative imaginary part.
-5. **Sweeps** the coupling *a* and fits the power law *γ = C · a^x*.
+4. **Estimates** the decay rate *Γ* from poles with sufficiently negative imaginary part.
+5. **Sweeps** the coupling *a* and fits the power law *Γ = C · a^x*.
 
 ---
 
@@ -80,14 +80,14 @@ A single `pole_sensitivity` parameter (0 = strict, 1 = permissive) maps to the d
 
 ### Decay-rate estimation
 
-Poles with Im ω below the default cutoff `-1e-2` contribute exponentially decaying modes. Their imaginary parts are pooled into a summed decay curve and fitted to an exponential via `scipy.optimize.curve_fit` to extract *γ*.
+Poles with Im ω below the default cutoff `-1e-2` contribute exponentially decaying modes. Their imaginary parts are pooled into a summed decay curve and fitted to an exponential via `scipy.optimize.curve_fit` to extract *Γ*.
 
 ### Power-law fit
 
-Over a sweep of *a* values the resulting *γ(a)* data are fitted in log-log space to
+Over a sweep of *a* values the resulting *Γ(a)* data are fitted in log-log space to
 
 ```
-γ = C · a^x
+Γ = C · a^x
 ```
 
 using `scipy.optimize.curve_fit`.
