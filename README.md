@@ -14,8 +14,9 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
 - [Method](#method)
 - [Requirements & Installation](#requirements--installation)
 - [Usage](#usage)
-- [Reference Output](#reference-output)
 - [Configuration Guide](#configuration-guide)
+- [Generated Outputs](#generated-outputs)
+- [Verification](#verification)
 - [License](#license)
 
 ---
@@ -28,20 +29,32 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
 
 ```
 .
-├── greens_func.ipynb   # Main analysis notebook
+├── greens_func.ipynb   # Main analysis notebook and orchestration
+├── core.py             # Numerical kernels, fitting, plotting, and worker functions
 ├── LICENSE
 └── README.md
 ```
 
 ### `greens_func.ipynb`
 
-A single self-contained Jupyter notebook that:
+A Jupyter notebook that configures and orchestrates the analysis:
 
 1. **Configures** the numerical grid and model parameters.
-2. **Computes** the Green's-function recurrence over the complex *ω*-plane (Numba-JIT, multi-threaded).
+2. **Computes** the Green's-function recurrence over the complex *ω*-plane using `core.py` process workers.
 3. **Detects** pole candidates as prominent local maxima in log₁₀|g|.
 4. **Estimates** the decay rate *γ* from the poles with non-positive imaginary part.
 5. **Sweeps** the coupling *a* and fits the power law *γ = C · a^x*.
+
+The heavy selected-plot and sweep cells call importable `core.py` worker functions in separate processes. This keeps Numba/OpenMP thread pools isolated and avoids the common notebook failure mode where only one CPU core is busy.
+
+### `core.py`
+
+Importable support module used by the notebook for:
+
+- Numba-compiled Green's-function iteration.
+- Pole detection and decay-rate fitting.
+- Coupling-sweep worker functions.
+- Figure generation and sweep-scan serialization.
 
 ---
 
@@ -49,10 +62,11 @@ A single self-contained Jupyter notebook that:
 
 ### Recurrence iteration
 
-Starting from an initial complex frequency grid
+Starting from initial complex frequency lines
 
 ```python
-w0_arr = np.linspace(w0_min, w0_max, n_w0) + 1j * w0_imag
+w0_start_lines = w0_real_arr[None, :] + 1j * w0_imag_values[:, None]
+w0_arr = w0_start_lines.ravel()
 ```
 
 the notebook iterates the two-step map
@@ -62,11 +76,11 @@ g  ←  1 / (i·a·g − i·ω)
 ω  ←  ω − i·m
 ```
 
-for `n_step` steps. Each trajectory is independent, enabling Numba `prange` parallelism over the `n_w0` starting values.
+for `n_step` steps. Each trajectory is independent, enabling Numba `prange` parallelism over the flattened `w0_arr` starting values.
 
 ### Pole detection
 
-The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, and scanned for local maxima that stand out above a rolling background. A single `pole_sensitivity` parameter (0 = strict, 1 = permissive) controls the detection thresholds.
+The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, and scanned for local maxima that stand out above a rolling background. Pole sensitivity is piecewise in `a`: `a <= 0.5` uses `0.6`, `0.5 < a < 3` uses `0.2`, and `a >= 3` uses `0.05`.
 
 ### Decay-rate estimation
 
@@ -94,20 +108,21 @@ The code requires Python ≥ 3.11 and the following packages:
 | `matplotlib` | Visualization |
 | `numba` | JIT compilation and multi-threaded iteration |
 | `scipy` | Peak detection and curve fitting |
+| `jupyter` | Notebook execution |
 
 Install with pip:
 
 ```bash
-pip install numpy matplotlib numba scipy
+pip install numpy matplotlib numba scipy jupyter
 ```
 
 or with conda:
 
 ```bash
-conda install numpy matplotlib numba scipy
+conda install numpy matplotlib numba scipy jupyter
 ```
 
-> **Note:** The notebook kernel metadata uses the display name `torch`, but no PyTorch dependency is required. Any Python 3.11 environment with the four packages above is sufficient.
+> **Note:** The notebook kernel metadata may use the display name `torch`, but no PyTorch dependency is required.
 
 ---
 
@@ -126,26 +141,7 @@ conda install numpy matplotlib numba scipy
 
    > The cells are stateful. Later analysis cells depend on variables produced by earlier configuration and computation cells, so running them out of order will raise `NameError`.
 
----
-
-## Reference Output
-
-The following results are produced by the default configuration saved in the notebook state. They are provided as a sanity-check reference, not a formal benchmark.
-
-### Single run (`a = 1.0`)
-
-```text
-Found 28 pole candidates
-gamma = 1.271340 +/- 0.082232
-```
-
-### Coupling sweep (`a ∈ [1, 100]`, 51 points)
-
-```text
-log-space power-law fit: gamma = 1.445093 * a^0.295870
-C = 1.445093 +/- 0.030071
-x = 0.295870 +/- 0.005016
-```
+For quick exploratory runs, reduce the grid sizes in the configuration cell before running the expensive selected-plot and sweep cells.
 
 ---
 
@@ -155,17 +151,46 @@ All tuneable parameters live in the **configuration cell** near the top of the n
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `num_threads` | `16` | Numba thread count; reduce to match available CPU cores |
-| `n_w0` | `5000` | Grid density along Re ω; major cost driver |
-| `w0_min / w0_max` | `−5 / 5` | Real-axis scan range |
-| `w0_imag` | `10.0` | Imaginary offset of the initial grid |
-| `a_values` | `linspace(1, 100, 51)` | Coupling values for the parameter sweep |
+| `num_threads` | `os.cpu_count() or 32` | Base Numba thread count |
+| `n_w0` | `5_000` | Grid density along Re ω; major cost driver |
+| `w0_min / w0_max` | `-5 / 5` | Real-axis scan range |
+| `w0_imag_values` | `linspace(10.0, 10.1, 50)` | Imaginary starting lines |
+| `a_values` | `linspace(0.01, 10.0, 50)` plus `selected_a_values` | Coupling values for the parameter sweep |
 | `m` | `0.05` | Imaginary step per iteration |
 | `iter_range` | `20` | Total imaginary range traversed (`n_step = iter_range/m + 1`) |
-| `pole_sensitivity` | `0.01` | Pole-detection permissiveness (0 = strict, 1 = sensitive) |
-| `scan_stride` | `10` | Subsampling factor for the `a`-sweep (higher = faster) |
+| `scan_stride` | `1` | Sweep subsampling factor; `1` is full accuracy |
+| `selected_n_jobs` | `min(len(selected_a_values), 4)` | Parallel selected-plot worker count |
+| `sweep_n_jobs` | `min(len(a_values), 8)` | Parallel sweep worker count |
+| `plot_log_vmin / plot_log_vmax` | `-1.3 / 0.3` | Fixed color range for log-scale pole heatmaps |
+| `save_sweep_scan_outputs` | `True` | Save heatmap-ready sweep arrays and pole data for later replotting |
+| `save_sweep_scan_a_values` | `selected_a_values` | Which sweep scans are saved as `.npz`; use `None` to save every scanned `a` |
 
-**For a quick exploratory run**, reduce `n_w0` to ~500 and set `a_values = np.linspace(1.0, 10.0, 5)` in a scratch copy before running the full production sweep.
+**For a quick exploratory run**, reduce `n_w0` to ~500, reduce `w0_imag_values`, and set `a_values = np.linspace(0.01, 10.0, 5)` before running the full production sweep.
+
+---
+
+## Generated Outputs
+
+The notebook writes generated artifacts to ignored local directories:
+
+| Path | Contents |
+|------|----------|
+| `.worker_results/` | Worker scratch arrays, saved sweep grids, and heatmap-ready `.npz` files |
+| `figures/` | Generated PDF figures for selected heatmaps, pole candidates, decay fits, and sweep fits |
+
+Saved full-accuracy sweep scans can be large. Use `save_sweep_scan_a_values = selected_a_values` to keep only the representative scans, or `None` to save every scanned `a` value.
+
+---
+
+## Verification
+
+Cheap syntax check:
+
+```bash
+python -m py_compile core.py
+```
+
+For runtime smoke tests, prefer a reduced grid in a scratch notebook run. Do not run the full notebook as a routine check unless final figures or production results are needed.
 
 ---
 

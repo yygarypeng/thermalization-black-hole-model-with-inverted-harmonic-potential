@@ -1,3 +1,5 @@
+AGENTS.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -77,6 +79,8 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+.worker_results/
+# figures/
 
 # IPython
 profile_default/
