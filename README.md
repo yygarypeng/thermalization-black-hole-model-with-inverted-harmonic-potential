@@ -10,14 +10,22 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
 
 ## Table of Contents
 
-- [Repository Structure](#repository-structure)
-- [Method](#method)
-- [Requirements & Installation](#requirements--installation)
-- [Usage](#usage)
-- [Configuration Guide](#configuration-guide)
-- [Generated Outputs](#generated-outputs)
-- [Verification](#verification)
-- [License](#license)
+- [Thermalization in a Black Hole Model with an Inverted Harmonic Potential](#thermalization-in-a-black-hole-model-with-an-inverted-harmonic-potential)
+  - [Table of Contents](#table-of-contents)
+  - [Repository Structure](#repository-structure)
+    - [`greens_func.ipynb`](#greens_funcipynb)
+    - [`core.py`](#corepy)
+  - [Method](#method)
+    - [Recurrence iteration](#recurrence-iteration)
+    - [Pole detection](#pole-detection)
+    - [Decay-rate estimation](#decay-rate-estimation)
+    - [Power-law fit](#power-law-fit)
+  - [Requirements \& Installation](#requirements--installation)
+  - [Usage](#usage)
+  - [Configuration Guide](#configuration-guide)
+  - [Generated Outputs](#generated-outputs)
+  - [Verification](#verification)
+  - [License](#license)
 
 ---
 
@@ -72,7 +80,8 @@ w0_arr = w0_start_lines.ravel()
 the notebook iterates the two-step map
 
 ```
-g  ←  1 / (i·a·g − i·ω)
+g0 ← i / (ω + i·eps)
+g  ← 1 / (i·a·g − i·ω)
 ω  ←  ω − i·m
 ```
 
@@ -84,14 +93,14 @@ The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log
 
 ### Decay-rate estimation
 
-Poles with Im ω ≤ 0 contribute exponentially decaying modes. Their imaginary parts are pooled to extract a single decay rate *γ* via a weighted least-squares exponential fit.
+Poles with Im ω below the default cutoff `-1e-2` contribute exponentially decaying modes. Their imaginary parts are pooled into a summed decay curve and fitted to an exponential via `scipy.optimize.curve_fit` to extract *Γ*.
 
 ### Power-law fit
 
-Over a sweep of *a* values the resulting *γ(a)* data are fitted in log-log space to
+Over a sweep of *a* values the resulting *Γ(a)* data are fitted in log-log space to
 
 ```
-γ = C · a^x
+Γ = C · a^x
 ```
 
 using `scipy.optimize.curve_fit`.
