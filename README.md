@@ -24,6 +24,7 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
   - [Usage](#usage)
   - [Configuration Guide](#configuration-guide)
   - [Generated Outputs](#generated-outputs)
+    - [Figure Descriptions](#figure-descriptions)
   - [Verification](#verification)
   - [License](#license)
 
@@ -188,6 +189,34 @@ The notebook writes generated artifacts to ignored local directories:
 | `figures/` | Generated PDF figures for selected heatmaps, pole candidates, decay fits, and sweep fits |
 
 Saved full-accuracy sweep scans can be large. Use `save_sweep_scan_a_values = selected_a_values` to keep only the representative scans, or `None` to save every scanned `a` value.
+
+### Figure Descriptions
+
+All figures are written as PDF files to the `figures/` directory. The four representative coupling values used in per-*a* figures are *a* = 0.01, 0.1, 1, and 10.
+
+#### `w0_starting_lines.pdf`
+
+Scatter plot of the initial conditions in the complex *ω*-plane. Each horizontal line corresponds to one of the 50 imaginary starting values (Im(*ω*₀) ∈ [10.0, 10.1]), drawn across the full real-axis scan range. This figure serves as a visual check that the starting grid is populated as intended before the recurrence is run.
+
+#### `g_heatmap_a_<value>.pdf`
+
+Four 2D heatmaps (one per representative *a* value) showing Re(*G*) in the complex *ω*-plane after the full recurrence iteration. The *x*-axis is Re(*ω*) and the *y*-axis is Im(*ω*). Colors use a diverging `coolwarm` palette symmetric around zero and clipped at the 98th percentile of |Re(*G*)|. Narrow streaks of large positive or negative Re(*G*) indicate the locations of quasi-normal-mode poles. Axis limits shrink with *a* to keep the dominant pole structure in view.
+
+#### `pole_candidates_a_<value>.pdf`
+
+Four log-scale heatmaps (one per representative *a* value) of log₁₀|*G*| in the complex *ω*-plane using the `magma` colormap. Detected pole candidates — prominent local maxima that stand out above a rolling background — are overlaid as cyan open circles. These figures are produced at full grid resolution from the selected runs and confirm that the automatic peak-finding algorithm captures the visually apparent poles.
+
+#### `sweep_pole_heatmap_a_<value>.pdf`
+
+Four log-scale heatmaps (one per representative *a* value) reconstructed from the saved `.npz` sweep-scan files in `.worker_results/`. The layout is the same as the `pole_candidates` figures (log₁₀|*G*| background with cyan pole markers), but the color range for each panel is fixed independently to best expose the pole structure at that coupling. These figures are suitable for publication-quality inspection without re-running the expensive sweep.
+
+#### `decay_fit_a_1.pdf`
+
+Time-domain decay curve for the representative case *a* = 1. The solid line is the summed exponential-decay signal constructed from all detected poles whose Im(*ω*) lies below the decay-rate cutoff (default −0.01). The dashed line is the best-fit exponential *A* exp(−*Γ t*) from `scipy.optimize.curve_fit`, with the fitted value of *Γ* shown in the legend. This figure provides a direct sanity check of the decay-rate extraction procedure.
+
+#### `gamma_vs_a_power_law_fit.pdf`
+
+Log-log scatter plot of the fitted decay rate *Γ* as a function of coupling *a* over the full parameter sweep. Error bars reflect the uncertainty returned by `curve_fit` for each individual decay fit. The dashed curve shows the best-fit power law *Γ* = *C* · *a*^*x* obtained by fitting in log-log space, with the exponent *x* and prefactor *C* displayed in the legend. This is the primary result figure of the analysis.
 
 ---
 
