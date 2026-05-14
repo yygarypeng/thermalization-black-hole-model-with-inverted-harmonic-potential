@@ -278,6 +278,22 @@ def save_figure(fig, save_path):
         fig.savefig(save_path, format="pdf", bbox_inches="tight")
 
 
+def plot_sample_heatmap(ax, heatmap_x, heatmap_y, heatmap_z, cmap, vmin, vmax):
+    finite = np.isfinite(heatmap_z)
+    return ax.scatter(
+        heatmap_x[finite],
+        heatmap_y[finite],
+        c=heatmap_z[finite],
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        marker="s",
+        s=0.25,
+        linewidths=0,
+        rasterized=True,
+    )
+
+
 def visible_plot_indices(w0_arr, n_step, m, xlim, ylim, start_stride, step_stride, x_padding=0.0, y_padding=0.0):
     row_indices = np.arange(0, len(w0_arr), start_stride)
     step_indices = np.arange(0, n_step, step_stride)
@@ -297,6 +313,76 @@ def visible_plot_indices(w0_arr, n_step, m, xlim, ylim, start_stride, step_strid
         step_indices = step_indices[step_mask]
 
     return row_indices, step_indices
+
+
+def infer_w0_grid_shape(w0_arr):
+    real_values = np.asarray(w0_arr.real)
+    reset_indices = np.flatnonzero(np.diff(real_values) < 0)
+    n_real = int(reset_indices[0] + 1) if len(reset_indices) else len(w0_arr)
+    if n_real == 0 or len(w0_arr) % n_real != 0:
+        return None
+
+    return len(w0_arr) // n_real, n_real
+
+
+def make_vertical_heatmap_arrays(
+    w0_arr,
+    values,
+    m,
+    xlim=(-2, 2),
+    ylim=(-3.0, 1.0),
+    start_stride=10,
+    step_stride=2,
+    x_padding=0.0,
+    y_padding=0.0,
+):
+    grid_shape = infer_w0_grid_shape(w0_arr)
+    if grid_shape is None:
+        row_indices, step_indices = visible_plot_indices(
+            w0_arr, values.shape[1], m, xlim, ylim, start_stride, step_stride, x_padding, y_padding
+        )
+        z = values[np.ix_(row_indices, step_indices)]
+        w_grid = w0_arr[row_indices, None] - 1j * m * step_indices[None, :]
+        return w_grid.real, w_grid.imag, z
+
+    n_imag, n_real = grid_shape
+    w0_grid = w0_arr.reshape(n_imag, n_real)
+    value_grid = values.reshape(n_imag, n_real, values.shape[1])
+    real_grid = w0_grid[0].real
+    imag_values = w0_grid[:, 0].imag
+
+    real_indices = np.arange(0, n_real, start_stride)
+    padded_xlim = (xlim[0] - x_padding, xlim[1] + x_padding)
+    real_mask = (real_grid[real_indices] >= padded_xlim[0]) & (real_grid[real_indices] <= padded_xlim[1])
+    if np.any(real_mask):
+        real_indices = real_indices[real_mask]
+
+    step_indices = np.arange(0, values.shape[1], step_stride)
+    padded_ylim = (ylim[0] - y_padding, ylim[1] + y_padding)
+    step_imag_min = np.min(imag_values) - m * step_indices
+    step_imag_max = np.max(imag_values) - m * step_indices
+    step_mask = (step_imag_max >= padded_ylim[0]) & (step_imag_min <= padded_ylim[1])
+    if np.any(step_mask):
+        step_indices = step_indices[step_mask]
+
+    y_grid = imag_values[:, None] - m * step_indices[None, :]
+    y_values = y_grid.ravel()
+    z = value_grid[:, real_indices, :][:, :, step_indices]
+    z = z.transpose(0, 2, 1).reshape(len(y_values), len(real_indices))
+
+    y_mask = (y_values >= padded_ylim[0]) & (y_values <= padded_ylim[1])
+    if np.any(y_mask):
+        y_values = y_values[y_mask]
+        z = z[y_mask]
+
+    y_order = np.argsort(y_values)
+    y_values = y_values[y_order]
+    z = z[y_order]
+    x_values = real_grid[real_indices]
+
+    heatmap_x = np.broadcast_to(x_values[None, :], z.shape)
+    heatmap_y = np.broadcast_to(y_values[:, None], z.shape)
+    return heatmap_x, heatmap_y, z
 
 
 def plot_w0_starting_lines(w0_real_arr, w0_imag_values, save_path=None, show=True):
@@ -327,24 +413,29 @@ def plot_g_heatmap(
     save_path=None,
     show=True,
 ):
-    row_indices, step_indices = visible_plot_indices(
-        w0_arr, g_arr.shape[1], m, xlim, ylim, start_stride, step_stride, x_padding, y_padding
+    heatmap_x, heatmap_y, z = make_vertical_heatmap_arrays(
+        w0_arr,
+        g_arr.real,
+        m,
+        xlim=xlim,
+        ylim=ylim,
+        start_stride=start_stride,
+        step_stride=step_stride,
+        x_padding=x_padding,
+        y_padding=y_padding,
     )
-    z = g_arr[np.ix_(row_indices, step_indices)].real
     finite_z = z[np.isfinite(z)]
     vmax = np.nanpercentile(np.abs(finite_z), 98) if len(finite_z) else 1.0
-    w_grid = w0_arr[row_indices, None] - 1j * m * step_indices[None, :]
 
     fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
-    heatmap = ax.pcolormesh(
-        w_grid.real,
-        w_grid.imag,
+    heatmap = plot_sample_heatmap(
+        ax,
+        heatmap_x,
+        heatmap_y,
         z,
-        cmap="coolwarm",
-        shading="auto",
-        vmin=-vmax,
-        vmax=vmax,
-        rasterized=True,
+        "coolwarm",
+        -vmax,
+        vmax,
     )
     fig.colorbar(heatmap, ax=ax, pad=0.02, label=r"$Re(G)$")
     ax.set_xlim(*xlim)
@@ -369,12 +460,17 @@ def make_pole_heatmap_arrays(
     x_padding=0.0,
     y_padding=0.0,
 ):
-    row_indices, step_indices = visible_plot_indices(
-        w0_arr, log_abs_g.shape[1], m, xlim, ylim, start_stride, step_stride, x_padding, y_padding
+    return make_vertical_heatmap_arrays(
+        w0_arr,
+        log_abs_g,
+        m,
+        xlim=xlim,
+        ylim=ylim,
+        start_stride=start_stride,
+        step_stride=step_stride,
+        x_padding=x_padding,
+        y_padding=y_padding,
     )
-    z = log_abs_g[np.ix_(row_indices, step_indices)]
-    w_grid = w0_arr[row_indices, None] - 1j * m * step_indices[None, :]
-    return w_grid.real, w_grid.imag, z
 
 
 def plot_saved_pole_heatmap(
@@ -397,15 +493,14 @@ def plot_saved_pole_heatmap(
         vmin, vmax = log_vmin, log_vmax
 
     fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
-    heatmap = ax.pcolormesh(
+    heatmap = plot_sample_heatmap(
+        ax,
         heatmap_x,
         heatmap_y,
         heatmap_z,
-        cmap="magma",
-        shading="auto",
-        vmin=vmin,
-        vmax=vmax,
-        rasterized=True,
+        "magma",
+        vmin,
+        vmax,
     )
     ax.scatter(pole_w.real, pole_w.imag, s=35, facecolors="none", edgecolors="cyan", linewidths=1.2)
     fig.colorbar(heatmap, ax=ax, label=r"$log_{10}(|G|)$")
