@@ -90,7 +90,7 @@ for `n_step` steps. Each trajectory is independent, enabling Numba `prange` para
 
 ### Pole detection
 
-The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, and scanned for local maxima that stand out above a rolling background. Pole sensitivity is piecewise in `a`: `a <= 0.5` uses `0.6`, `0.5 < a < 3` uses `0.2`, and `a >= 3` uses `0.05`.
+The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, and scanned for local maxima that stand out above a rolling background. Pole sensitivity is piecewise in `a`: `a <= 0.5` uses `0.6`, `0.5 < a < 3` uses `0.1`, and `a >= 3` uses `0.001`.
 
 ### Decay-rate estimation
 
@@ -120,6 +120,14 @@ The code requires Python ≥ 3.11 and the following packages:
 | `scipy` | Peak detection and curve fitting |
 | `jupyter` | Notebook execution |
 
+Create and activate a virtual environment (recommended):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
 Install with pip:
 
 ```bash
@@ -132,7 +140,7 @@ or with conda:
 conda install numpy matplotlib numba scipy jupyter
 ```
 
-> **Note:** The notebook kernel metadata may use the display name `torch`, but no PyTorch dependency is required.
+> **Note:** The notebook uses the standard `python3` kernel. No PyTorch dependency is required.
 
 ---
 
@@ -163,17 +171,20 @@ All tuneable parameters live in the **configuration cell** near the top of the n
 |-----------|---------|--------|
 | `num_threads` | `os.cpu_count() or 32` | Base Numba thread count |
 | `n_w0` | `5_000` | Grid density along Re ω; major cost driver |
-| `w0_min / w0_max` | `-5 / 5` | Real-axis scan range |
-| `w0_imag_values` | `linspace(10.0, 10.1, 50)` | Imaginary starting lines |
+| `w0_min / w0_max` | `output_w_range(a)` (piecewise by coupling) | Real-axis scan range adapts to each `a` |
+| `w0_imag_values` | `linspace(10.0, 10.05, 50)` | Imaginary starting lines |
 | `a_values` | `linspace(0.01, 10.0, 50)` plus `selected_a_values` | Coupling values for the parameter sweep |
 | `m` | `0.05` | Imaginary step per iteration |
 | `iter_range` | `20` | Total imaginary range traversed (`n_step = iter_range/m + 1`) |
+| `worker_start_method` | `'forkserver'` (fallback to `'spawn'`) | Multiprocessing start method for worker batches |
+| `low_a_pole_sensitivity / mid_a_pole_sensitivity / high_a_pole_sensitivity` | `0.6 / 0.1 / 0.001` | Pole-picking sensitivity in low/mid/high-`a` regions |
 | `scan_stride` | `1` | Sweep subsampling factor; `1` is full accuracy |
-| `selected_n_jobs` | `min(len(selected_a_values), 4)` | Parallel selected-plot worker count |
-| `sweep_n_jobs` | `min(len(a_values), 8)` | Parallel sweep worker count |
+| `selected_n_jobs` | `max(1, min(len(selected_a_values), 4))` | Parallel selected-plot worker count |
+| `sweep_n_jobs` | `max(1, min(len(a_values), 8))` | Parallel sweep worker count |
 | `plot_log_vmin / plot_log_vmax` | `-1.3 / 0.3` | Fixed color range for log-scale pole heatmaps |
 | `save_sweep_scan_outputs` | `True` | Save heatmap-ready sweep arrays and pole data for later replotting |
 | `save_sweep_scan_a_values` | `selected_a_values` | Which sweep scans are saved as `.npz`; use `None` to save every scanned `a` |
+| `save_sweep_scan_compressed` | `False` | Use `np.savez_compressed` for sweep scan archives |
 
 **For a quick exploratory run**, reduce `n_w0` to ~500, reduce `w0_imag_values`, and set `a_values = np.linspace(0.01, 10.0, 5)` before running the full production sweep.
 
