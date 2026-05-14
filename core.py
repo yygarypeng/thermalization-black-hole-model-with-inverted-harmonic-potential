@@ -508,7 +508,8 @@ def plot_saved_pole_heatmap(
     ax.set_ylim(*ylim)
     ax.set_xlabel(r"$Re(\omega)$")
     ax.set_ylabel(r"$Im(\omega)$")
-    ax.set_title(title)
+    if title:
+        ax.set_title(title)
     save_figure(fig, save_path)
     if show:
         plt.show()
