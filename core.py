@@ -1,3 +1,5 @@
+"""Numerical, fitting, plotting, and worker helpers for the Green's-function notebook."""
+
 import gc
 from pathlib import Path
 
@@ -8,41 +10,13 @@ from scipy.ndimage import maximum_filter, median_filter
 from scipy.optimize import curve_fit
 
 
-@njit(parallel=True)
-def g_iterator(w0_arr, a, eps, m, max_iter, denom_floor=1e-12, g_abs_max=1e12):
-    n_w = len(w0_arr)
-    g_arr = np.empty((n_w, max_iter), dtype=np.complex128)
-    nan_value = np.nan + 1j * np.nan
-
-    for j in prange(n_w):
-        w = w0_arr[j]
-        g = 1j / (w + 1j * eps)
-        g_arr[j, 0] = g
-
-        for i in range(1, max_iter):
-            g_abs = abs(g)
-            denom = 1j * a * g - 1j * w
-            denom_abs = abs(denom)
-
-            if (
-                not np.isfinite(g_abs)
-                or not np.isfinite(denom_abs)
-                or denom_abs < denom_floor
-                or g_abs > g_abs_max
-            ):
-                for k in range(i, max_iter):
-                    g_arr[j, k] = nan_value
-                break
-
-            g = 1 / denom
-            w = w - 1j * m
-            g_arr[j, i] = g
-
-    return g_arr
+# -----------------------------------------------------------------------------
+# Green's-function iteration
 
 
 @njit(parallel=True)
 def log_abs_g_iterator(w0_arr, a, eps, m, max_iter, denom_floor=1e-12, g_abs_max=1e12):
+    """Iterate the recurrence and return log10(abs(G)) for every starting point."""
     n_w = len(w0_arr)
     log_abs_g = np.empty((n_w, max_iter), dtype=np.float64)
     tiny = np.finfo(np.float64).tiny
@@ -76,7 +50,12 @@ def log_abs_g_iterator(w0_arr, a, eps, m, max_iter, denom_floor=1e-12, g_abs_max
     return log_abs_g
 
 
+# -----------------------------------------------------------------------------
+# Pole detection
+
+
 def pole_detection_config(sensitivity):
+    """Translate a 0..1 pole-detection sensitivity into peak-filter settings."""
     sensitivity = float(np.clip(sensitivity, 0.0, 1.0))
     return {
         "peak_window": 7 if sensitivity < 0.25 else 5 if sensitivity < 0.65 else 3,
@@ -88,6 +67,7 @@ def pole_detection_config(sensitivity):
 
 
 def pole_sensitivity_for_a(a_value, low_max=0.5, high_min=3.0, low=0.85, mid=0.5, high=0.15):
+    """Return the piecewise pole-detection sensitivity for a coupling value."""
     if a_value <= low_max:
         return low
     if a_value < high_min:
@@ -96,10 +76,12 @@ def pole_sensitivity_for_a(a_value, low_max=0.5, high_min=3.0, low=0.85, mid=0.5
 
 
 def pole_config_for_a(a_value, low_max=0.5, high_min=3.0, low=0.85, mid=0.5, high=0.15):
+    """Build a pole-detection config for a coupling value."""
     return pole_detection_config(pole_sensitivity_for_a(a_value, low_max, high_min, low, mid, high))
 
 
 def pole_config_for_a_from_config(a_value, config):
+    """Build a pole-detection config from the notebook/worker config mapping."""
     return pole_config_for_a(
         a_value,
         config["low_sensitivity_max_a"],
@@ -110,23 +92,11 @@ def pole_config_for_a_from_config(a_value, config):
     )
 
 
-def compute_log_abs_g(g_arr):
-    abs_g = np.abs(g_arr)
-    finite = np.isfinite(abs_g)
-    log_abs_g = np.full(abs_g.shape, np.nan, dtype=float)
-    log_abs_g[finite] = np.log10(np.maximum(abs_g[finite], np.finfo(float).tiny))
-    return log_abs_g, finite
-
-
-def find_poles(g_arr, w0_arr, m, config):
-    log_abs_g, _ = compute_log_abs_g(g_arr)
-    return find_poles_from_log_abs_g(log_abs_g, w0_arr, m, config)
-
-
 def find_poles_from_log_abs_g(log_abs_g, w0_arr, m, config):
+    """Find prominent local maxima in a log10(abs(G)) iteration grid."""
     finite = np.isfinite(log_abs_g)
     if not np.any(finite):
-        return np.array([], dtype=complex), np.array([]), log_abs_g
+        return np.array([], dtype=complex)
 
     finite_floor = np.nanmin(log_abs_g) - 1.0
     filtered_log_abs_g = np.where(np.isfinite(log_abs_g), log_abs_g, finite_floor)
@@ -144,21 +114,25 @@ def find_poles_from_log_abs_g(log_abs_g, w0_arr, m, config):
     order = np.argsort(candidate_strength)[::-1]
 
     selected_w = []
-    selected_strength = []
     for idx in order:
         w = candidate_w[idx]
         if all(abs(w - kept_w) >= config["min_separation"] for kept_w in selected_w):
             selected_w.append(w)
-            selected_strength.append(candidate_strength[idx])
 
-    return np.array(selected_w, dtype=complex), np.array(selected_strength), log_abs_g
+    return np.array(selected_w, dtype=complex)
+
+
+# -----------------------------------------------------------------------------
+# Fitting
 
 
 def exp_decay(t, amplitude, gamma):
+    """Single-exponential decay model used for curve fitting."""
     return amplitude * np.exp(-gamma * t)
 
 
 def fit_gamma_from_poles(pole_w, t_max=20, tor=-1e-2):
+    """Fit the decay rate gamma from poles below the imaginary-axis cutoff."""
     decaying_poles = pole_w[pole_w.imag < tor]
     if len(decaying_poles) < 3:
         return np.nan, np.nan, None, None, None
@@ -186,6 +160,7 @@ def fit_gamma_from_poles(pole_w, t_max=20, tor=-1e-2):
 
 
 def fit_power_law(a_values, gamma_values, gamma_errors):
+    """Fit gamma(a) to C * a**x in log-log space."""
     valid = np.isfinite(gamma_values) & (gamma_values > 0) & (a_values > 0)
     fit_a = a_values[valid]
     fit_gamma = gamma_values[valid]
@@ -215,55 +190,36 @@ def fit_power_law(a_values, gamma_values, gamma_errors):
 
 
 def power_law(a, C, x):
+    """Power-law model used for plotting the fitted gamma(a) curve."""
     return C * a**x
 
 
-def compute_poles_for_a(a_value, w0_arr, config, eps, m, n_step, denom_floor, g_abs_max, threads=None):
-    if threads is not None:
-        set_num_threads(threads)
-    g_arr = g_iterator(w0_arr, a_value, eps, m, n_step, denom_floor, g_abs_max)
-    pole_w, pole_strength, log_abs_g = find_poles(g_arr, w0_arr, m, config)
-    return g_arr, pole_w, pole_strength, log_abs_g
-
-
-def compute_sweep_gamma_for_a(a_value, scan_w0_arr, config, eps, m, n_step, denom_floor, g_abs_max, threads=None):
-    if threads is not None:
-        set_num_threads(threads)
-    scan_log_abs_g = log_abs_g_iterator(scan_w0_arr, a_value, eps, m, n_step, denom_floor, g_abs_max)
-    scan_pole_w, _, _ = find_poles_from_log_abs_g(scan_log_abs_g, scan_w0_arr, m, config)
-    gamma, gamma_err, _, _, _ = fit_gamma_from_poles(scan_pole_w)
-    del scan_log_abs_g
-    gc.collect()
-    return gamma, gamma_err, len(scan_pole_w)
+# -----------------------------------------------------------------------------
+# Sweep computation and file naming
 
 
 def compute_sweep_scan_for_a(a_value, scan_w0_arr, config, eps, m, n_step, denom_floor, g_abs_max, threads=None):
+    """Compute one full-grid sweep scan and its decay-rate estimate."""
     if threads is not None:
         set_num_threads(threads)
     scan_log_abs_g = log_abs_g_iterator(scan_w0_arr, a_value, eps, m, n_step, denom_floor, g_abs_max)
-    scan_pole_w, _, _ = find_poles_from_log_abs_g(scan_log_abs_g, scan_w0_arr, m, config)
+    scan_pole_w = find_poles_from_log_abs_g(scan_log_abs_g, scan_w0_arr, m, config)
     gamma, gamma_err, _, _, _ = fit_gamma_from_poles(scan_pole_w)
     return gamma, gamma_err, len(scan_pole_w), scan_log_abs_g, scan_pole_w
 
 
 def format_a_for_filename(a_value):
+    """Format a coupling value as a filename-safe token."""
     return f"{a_value:g}".replace("-", "m").replace(".", "p")
 
 
 def sweep_scan_filename(a_value):
+    """Return the saved-scan filename for a coupling value."""
     return f"sweep_scan_a_{format_a_for_filename(a_value)}.npz"
 
 
-def should_save_sweep_scan(a_value, config):
-    if not config.get("save_sweep_scan_outputs", False):
-        return False
-    saved_a_values = config.get("save_sweep_scan_a_values")
-    if saved_a_values is None:
-        return True
-    return np.any(np.isclose(float(a_value), np.asarray(saved_a_values, dtype=float)))
-
-
 def load_w0_arr_for_job(job):
+    """Load and flatten the starting-frequency grid assigned to a worker job."""
     grid_dir = Path(job["grid_dir"])
     index = job["index"]
     w0_real_arr_by_a = np.load(grid_dir / "w0_real_arr_by_a.npy", mmap_mode="r")
@@ -273,119 +229,18 @@ def load_w0_arr_for_job(job):
     return w0_start_lines.ravel()
 
 
+# -----------------------------------------------------------------------------
+# Plotting
+
+
 def save_figure(fig, save_path):
+    """Save a matplotlib figure when a path is provided."""
     if save_path is not None:
         fig.savefig(save_path, format="pdf", bbox_inches="tight")
 
 
-def plot_sample_heatmap(ax, heatmap_x, heatmap_y, heatmap_z, cmap, vmin, vmax):
-    finite = np.isfinite(heatmap_z)
-    return ax.scatter(
-        heatmap_x[finite],
-        heatmap_y[finite],
-        c=heatmap_z[finite],
-        cmap=cmap,
-        vmin=vmin,
-        vmax=vmax,
-        marker="s",
-        s=0.25,
-        linewidths=0,
-        rasterized=True,
-    )
-
-
-def visible_plot_indices(w0_arr, n_step, m, xlim, ylim, start_stride, step_stride, x_padding=0.0, y_padding=0.0):
-    row_indices = np.arange(0, len(w0_arr), start_stride)
-    step_indices = np.arange(0, n_step, step_stride)
-    row_w0 = w0_arr[row_indices]
-    padded_xlim = (xlim[0] - x_padding, xlim[1] + x_padding)
-    padded_ylim = (ylim[0] - y_padding, ylim[1] + y_padding)
-
-    row_mask = (row_w0.real >= padded_xlim[0]) & (row_w0.real <= padded_xlim[1])
-    if np.any(row_mask):
-        row_indices = row_indices[row_mask]
-        row_w0 = row_w0[row_mask]
-
-    step_imag_min = np.min(row_w0.imag) - m * step_indices
-    step_imag_max = np.max(row_w0.imag) - m * step_indices
-    step_mask = (step_imag_max >= padded_ylim[0]) & (step_imag_min <= padded_ylim[1])
-    if np.any(step_mask):
-        step_indices = step_indices[step_mask]
-
-    return row_indices, step_indices
-
-
-def infer_w0_grid_shape(w0_arr):
-    real_values = np.asarray(w0_arr.real)
-    reset_indices = np.flatnonzero(np.diff(real_values) < 0)
-    n_real = int(reset_indices[0] + 1) if len(reset_indices) else len(w0_arr)
-    if n_real == 0 or len(w0_arr) % n_real != 0:
-        return None
-
-    return len(w0_arr) // n_real, n_real
-
-
-def make_vertical_heatmap_arrays(
-    w0_arr,
-    values,
-    m,
-    xlim=(-2, 2),
-    ylim=(-3.0, 1.0),
-    start_stride=10,
-    step_stride=2,
-    x_padding=0.0,
-    y_padding=0.0,
-):
-    grid_shape = infer_w0_grid_shape(w0_arr)
-    if grid_shape is None:
-        row_indices, step_indices = visible_plot_indices(
-            w0_arr, values.shape[1], m, xlim, ylim, start_stride, step_stride, x_padding, y_padding
-        )
-        z = values[np.ix_(row_indices, step_indices)]
-        w_grid = w0_arr[row_indices, None] - 1j * m * step_indices[None, :]
-        return w_grid.real, w_grid.imag, z
-
-    n_imag, n_real = grid_shape
-    w0_grid = w0_arr.reshape(n_imag, n_real)
-    value_grid = values.reshape(n_imag, n_real, values.shape[1])
-    real_grid = w0_grid[0].real
-    imag_values = w0_grid[:, 0].imag
-
-    real_indices = np.arange(0, n_real, start_stride)
-    padded_xlim = (xlim[0] - x_padding, xlim[1] + x_padding)
-    real_mask = (real_grid[real_indices] >= padded_xlim[0]) & (real_grid[real_indices] <= padded_xlim[1])
-    if np.any(real_mask):
-        real_indices = real_indices[real_mask]
-
-    step_indices = np.arange(0, values.shape[1], step_stride)
-    padded_ylim = (ylim[0] - y_padding, ylim[1] + y_padding)
-    step_imag_min = np.min(imag_values) - m * step_indices
-    step_imag_max = np.max(imag_values) - m * step_indices
-    step_mask = (step_imag_max >= padded_ylim[0]) & (step_imag_min <= padded_ylim[1])
-    if np.any(step_mask):
-        step_indices = step_indices[step_mask]
-
-    y_grid = imag_values[:, None] - m * step_indices[None, :]
-    y_values = y_grid.ravel()
-    z = value_grid[:, real_indices, :][:, :, step_indices]
-    z = z.transpose(0, 2, 1).reshape(len(y_values), len(real_indices))
-
-    y_mask = (y_values >= padded_ylim[0]) & (y_values <= padded_ylim[1])
-    if np.any(y_mask):
-        y_values = y_values[y_mask]
-        z = z[y_mask]
-
-    y_order = np.argsort(y_values)
-    y_values = y_values[y_order]
-    z = z[y_order]
-    x_values = real_grid[real_indices]
-
-    heatmap_x = np.broadcast_to(x_values[None, :], z.shape)
-    heatmap_y = np.broadcast_to(y_values[:, None], z.shape)
-    return heatmap_x, heatmap_y, z
-
-
 def plot_w0_starting_lines(w0_real_arr, w0_imag_values, save_path=None, show=True):
+    """Plot the initial horizontal starting lines in the complex omega plane."""
     fig, ax = plt.subplots(figsize=(9, 3), constrained_layout=True)
     for w0_imag in w0_imag_values:
         ax.plot(w0_real_arr, np.full_like(w0_real_arr, w0_imag), linewidth=0.5)
@@ -399,167 +254,8 @@ def plot_w0_starting_lines(w0_real_arr, w0_imag_values, save_path=None, show=Tru
     plt.close(fig)
 
 
-def plot_g_heatmap(
-    w0_arr,
-    g_arr,
-    m,
-    xlim=(-1.5, 1.5),
-    ylim=(-10.0, 10.0),
-    title="Iterative Solution of g",
-    start_stride=10,
-    step_stride=2,
-    x_padding=0.0,
-    y_padding=0.0,
-    save_path=None,
-    show=True,
-):
-    heatmap_x, heatmap_y, z = make_vertical_heatmap_arrays(
-        w0_arr,
-        g_arr.real,
-        m,
-        xlim=xlim,
-        ylim=ylim,
-        start_stride=start_stride,
-        step_stride=step_stride,
-        x_padding=x_padding,
-        y_padding=y_padding,
-    )
-    finite_z = z[np.isfinite(z)]
-    vmax = np.nanpercentile(np.abs(finite_z), 98) if len(finite_z) else 1.0
-
-    fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
-    heatmap = plot_sample_heatmap(
-        ax,
-        heatmap_x,
-        heatmap_y,
-        z,
-        "coolwarm",
-        -vmax,
-        vmax,
-    )
-    fig.colorbar(heatmap, ax=ax, pad=0.02, label=r"$Re(G)$")
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
-    ax.set_xlabel(r"$Re(\omega)$")
-    ax.set_ylabel(r"$Im(\omega)$")
-    ax.set_title(title)
-    save_figure(fig, save_path)
-    if show:
-        plt.show()
-    plt.close(fig)
-
-
-def make_pole_heatmap_arrays(
-    w0_arr,
-    log_abs_g,
-    m,
-    xlim=(-2, 2),
-    ylim=(-3.0, 1.0),
-    start_stride=10,
-    step_stride=2,
-    x_padding=0.0,
-    y_padding=0.0,
-):
-    return make_vertical_heatmap_arrays(
-        w0_arr,
-        log_abs_g,
-        m,
-        xlim=xlim,
-        ylim=ylim,
-        start_stride=start_stride,
-        step_stride=step_stride,
-        x_padding=x_padding,
-        y_padding=y_padding,
-    )
-
-
-def plot_saved_pole_heatmap(
-    heatmap_x,
-    heatmap_y,
-    heatmap_z,
-    pole_w,
-    xlim=(-2, 2),
-    ylim=(-3.0, 1.0),
-    title="Pole Candidates from Saved Sweep Scan",
-    save_path=None,
-    show=True,
-    log_vmin=None,
-    log_vmax=None,
-):
-    finite_z = heatmap_z[np.isfinite(heatmap_z)]
-    if log_vmin is None or log_vmax is None:
-        vmin, vmax = np.nanpercentile(finite_z, [5, 99.8]) if len(finite_z) else (0.0, 1.0)
-    else:
-        vmin, vmax = log_vmin, log_vmax
-
-    fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
-    heatmap = plot_sample_heatmap(
-        ax,
-        heatmap_x,
-        heatmap_y,
-        heatmap_z,
-        "magma",
-        vmin,
-        vmax,
-    )
-    ax.scatter(pole_w.real, pole_w.imag, s=35, facecolors="none", edgecolors="cyan", linewidths=1.2)
-    fig.colorbar(heatmap, ax=ax, label=r"$log_{10}(|G|)$")
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
-    ax.set_xlabel(r"$Re(\omega)$")
-    ax.set_ylabel(r"$Im(\omega)$")
-    if title:
-        ax.set_title(title)
-    save_figure(fig, save_path)
-    if show:
-        plt.show()
-    plt.close(fig)
-
-
-def plot_poles(
-    w0_arr,
-    log_abs_g,
-    pole_w,
-    m,
-    xlim=(-2, 2),
-    ylim=(-3.0, 1.0),
-    title="Pole Candidates from Prominent Local Peaks",
-    start_stride=10,
-    step_stride=2,
-    x_padding=0.0,
-    y_padding=0.0,
-    save_path=None,
-    show=True,
-    log_vmin=None,
-    log_vmax=None,
-):
-    heatmap_x, heatmap_y, heatmap_z = make_pole_heatmap_arrays(
-        w0_arr,
-        log_abs_g,
-        m,
-        xlim=xlim,
-        ylim=ylim,
-        start_stride=start_stride,
-        step_stride=step_stride,
-        x_padding=x_padding,
-        y_padding=y_padding,
-    )
-    plot_saved_pole_heatmap(
-        heatmap_x,
-        heatmap_y,
-        heatmap_z,
-        pole_w,
-        xlim=xlim,
-        ylim=ylim,
-        title=title,
-        save_path=save_path,
-        show=show,
-        log_vmin=log_vmin,
-        log_vmax=log_vmax,
-    )
-
-
 def plot_decay_fit(gamma, time, decay_curves, fit_curve, save_path=None):
+    """Plot the summed pole decay and the fitted exponential curve."""
     if time is None:
         print("not enough decaying poles for gamma fit")
         return
@@ -579,6 +275,7 @@ def plot_decay_fit(gamma, time, decay_curves, fit_curve, save_path=None):
 
 
 def plot_a_gamma_fit(a_values, gamma_values, gamma_errors, C, x, fit_a, save_path=None):
+    """Plot fitted gamma values against coupling and overlay the power-law fit."""
     fig, ax = plt.subplots(constrained_layout=True)
     ax.errorbar(a_values, gamma_values, yerr=gamma_errors, fmt=".", linestyle="none", capsize=4, label="data")
     if np.isfinite(C) and np.isfinite(x) and len(fit_a):
@@ -594,75 +291,15 @@ def plot_a_gamma_fit(a_values, gamma_values, gamma_errors, C, x, fit_a, save_pat
     plt.close(fig)
 
 
-def save_selected_figures(a_value, w0_arr, g_arr, log_abs_g, pole_w, config, figure_dir):
-    limits = config["selected_plot_limits"][str(a_value)]
-    a_name = format_a_for_filename(a_value)
-    plot_g_heatmap(
-        w0_arr,
-        g_arr,
-        config["m"],
-        xlim=tuple(limits["xlim"]),
-        ylim=tuple(limits["ylim"]),
-        title=f"a = {a_value:g}: Iterative Solution of $G$",
-        start_stride=config["plot_start_stride"],
-        step_stride=config["plot_step_stride"],
-        x_padding=config["plot_x_padding"],
-        y_padding=config["plot_y_padding"],
-        save_path=figure_dir / f"g_heatmap_a_{a_name}.pdf",
-        show=False,
-    )
-    plot_poles(
-        w0_arr,
-        log_abs_g,
-        pole_w,
-        config["m"],
-        xlim=tuple(limits["xlim"]),
-        ylim=tuple(limits["ylim"]),
-        title=f"a = {a_value:g}: Selected Pole Candidates",
-        start_stride=config["plot_start_stride"],
-        step_stride=config["plot_step_stride"],
-        x_padding=config["plot_x_padding"],
-        y_padding=config["plot_y_padding"],
-        save_path=figure_dir / f"pole_candidates_a_{a_name}.pdf",
-        show=False,
-        log_vmin=config.get("plot_log_vmin"),
-        log_vmax=config.get("plot_log_vmax"),
-    )
-
-
-def run_selected_job(job):
-    config = job["config"]
-    a_value = job["a"]
-    w0_arr = load_w0_arr_for_job(job)
-    pole_config = pole_config_for_a_from_config(a_value, config)
-    g_arr, pole_w, pole_strength, log_abs_g = compute_poles_for_a(
-        a_value,
-        w0_arr,
-        pole_config,
-        config["eps"],
-        config["m"],
-        config["n_step"],
-        config["denom_floor"],
-        config["g_abs_max"],
-        threads=job["threads"],
-    )
-    save_selected_figures(a_value, w0_arr, g_arr, log_abs_g, pole_w, config, Path(job["figure_dir"]))
-    del g_arr, log_abs_g
-    gc.collect()
-    return {
-        "a": a_value,
-        "pole_w": pole_w,
-        "pole_strength": pole_strength,
-        "n_poles": len(pole_w),
-        "threads": get_num_threads(),
-    }
+# -----------------------------------------------------------------------------
+# Process-pool workers
 
 
 def run_sweep_job(job):
+    """Worker entry point for one coupling value in the full-grid sweep."""
     config = job["config"]
     a_value = job["a"]
-    w0_arr = load_w0_arr_for_job(job)
-    scan_w0_arr = w0_arr[:: config["scan_stride"]]
+    scan_w0_arr = load_w0_arr_for_job(job)
     pole_config = pole_config_for_a_from_config(a_value, config)
     gamma, gamma_err, n_poles, scan_log_abs_g, scan_pole_w = compute_sweep_scan_for_a(
         a_value,
@@ -675,57 +312,19 @@ def run_sweep_job(job):
         config["g_abs_max"],
         threads=job["threads"],
     )
-    scan_path = None
-    if should_save_sweep_scan(a_value, config):
-        scan_path = Path(job["scan_output_dir"]) / sweep_scan_filename(a_value)
-        limits = config.get("selected_plot_limits", {}).get(str(a_value))
-        if limits is None:
-            plot_xlim = (float(np.nanmin(scan_w0_arr.real)), float(np.nanmax(scan_w0_arr.real)))
-            plot_ylim = (
-                float(np.nanmin(scan_w0_arr.imag) - config["m"] * (config["n_step"] - 1)),
-                float(np.nanmax(scan_w0_arr.imag)),
-            )
-        else:
-            plot_xlim = tuple(limits["xlim"])
-            plot_ylim = tuple(limits["ylim"])
-        heatmap_x, heatmap_y, heatmap_z = make_pole_heatmap_arrays(
-            scan_w0_arr,
-            scan_log_abs_g,
-            config["m"],
-            xlim=plot_xlim,
-            ylim=plot_ylim,
-            start_stride=config["plot_start_stride"],
-            step_stride=config["plot_step_stride"],
-            x_padding=config["plot_x_padding"],
-            y_padding=config["plot_y_padding"],
-        )
-        plot_log_vmin = config.get("plot_log_vmin")
-        plot_log_vmax = config.get("plot_log_vmax")
-        save_kwargs = {
-            "a_value": a_value,
-            "heatmap_x": heatmap_x,
-            "heatmap_y": heatmap_y,
-            "heatmap_z": heatmap_z,
-            "pole_w": scan_pole_w,
-            "gamma": gamma,
-            "gamma_err": gamma_err,
-            "n_poles": n_poles,
-            "m": config["m"],
-            "n_step": config["n_step"],
-            "scan_stride": config["scan_stride"],
-            "plot_xlim": np.asarray(plot_xlim),
-            "plot_ylim": np.asarray(plot_ylim),
-            "plot_start_stride": config["plot_start_stride"],
-            "plot_step_stride": config["plot_step_stride"],
-            "plot_x_padding": config["plot_x_padding"],
-            "plot_y_padding": config["plot_y_padding"],
-            "plot_log_vmin": np.nan if plot_log_vmin is None else plot_log_vmin,
-            "plot_log_vmax": np.nan if plot_log_vmax is None else plot_log_vmax,
-        }
-        if config.get("save_sweep_scan_compressed", False):
-            np.savez_compressed(scan_path, **save_kwargs)
-        else:
-            np.savez(scan_path, **save_kwargs)
+    scan_path = Path(job["scan_output_dir"]) / sweep_scan_filename(a_value)
+    np.savez_compressed(
+        scan_path,
+        a_value=a_value,
+        scan_w0_arr=scan_w0_arr,
+        scan_log_abs_g=scan_log_abs_g,
+        pole_w=scan_pole_w,
+        gamma=gamma,
+        gamma_err=gamma_err,
+        n_poles=n_poles,
+        m=config["m"],
+        n_step=config["n_step"],
+    )
     del scan_log_abs_g
     gc.collect()
     return {
@@ -735,5 +334,5 @@ def run_sweep_job(job):
         "gamma_err": gamma_err,
         "n_poles": n_poles,
         "threads": get_num_threads(),
-        "scan_path": str(scan_path) if scan_path is not None else None,
+        "scan_path": str(scan_path),
     }

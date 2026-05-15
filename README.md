@@ -24,6 +24,7 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
   - [Usage](#usage)
   - [Configuration Guide](#configuration-guide)
   - [Generated Outputs](#generated-outputs)
+    - [Saved Sweep Scan Format](#saved-sweep-scan-format)
     - [Figure Descriptions](#figure-descriptions)
   - [Verification](#verification)
   - [License](#license)
@@ -40,6 +41,7 @@ Research code accompanying the thesis of Amigo on thermalization in a black hole
 .
 ├── greens_func.ipynb   # Main analysis notebook and orchestration
 ├── core.py             # Numerical kernels, fitting, plotting, and worker functions
+├── figures/            # Tracked generated PDF figures
 ├── LICENSE
 └── README.md
 ```
@@ -54,7 +56,7 @@ A Jupyter notebook that configures and orchestrates the analysis:
 4. **Estimates** the decay rate *γ* from the poles with non-positive imaginary part.
 5. **Sweeps** the coupling *a* and fits the power law *γ = C · a^x*.
 
-The heavy selected-plot and sweep cells call importable `core.py` worker functions in separate processes. This keeps Numba/OpenMP thread pools isolated and avoids the common notebook failure mode where only one CPU core is busy.
+The heavy sweep cell calls importable `core.py` worker functions in separate processes. This keeps Numba/OpenMP thread pools isolated and avoids the common notebook failure mode where only one CPU core is busy.
 
 ### `core.py`
 
@@ -62,8 +64,8 @@ Importable support module used by the notebook for:
 
 - Numba-compiled Green's-function iteration.
 - Pole detection and decay-rate fitting.
-- Coupling-sweep worker functions.
-- Figure generation and sweep-scan serialization.
+- Coupling-sweep worker execution and sweep-scan serialization.
+- Shared plotting helpers for the starting grid, decay fit, and power-law fit.
 
 ---
 
@@ -90,7 +92,7 @@ for `n_step` steps. Each trajectory is independent, enabling Numba `prange` para
 
 ### Pole detection
 
-The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, and scanned for local maxima that stand out above a rolling background. Pole sensitivity is piecewise in `a`: `a <= 0.5` uses `0.6`, `0.5 < a < 3` uses `0.2`, and `a >= 3` uses `0.05`.
+The absolute value |g| is evaluated on the (Re ω, Im ω) grid, converted to log₁₀ scale, and scanned for local maxima that stand out above a rolling background. In the current notebook configuration, pole sensitivity is piecewise in `a`: `a <= 0.5` uses `0.6`, `0.5 < a < 3` uses `0.1`, and `a >= 3` uses `0.001`.
 
 ### Decay-rate estimation
 
@@ -116,6 +118,7 @@ The code requires Python ≥ 3.11 and the following packages:
 |---------|---------|
 | `numpy` | Array operations and grid construction |
 | `matplotlib` | Visualization |
+| `mplhep` | Optional ATLAS-style plot formatting in the final notebook cell |
 | `numba` | JIT compilation and multi-threaded iteration |
 | `scipy` | Peak detection and curve fitting |
 | `jupyter` | Notebook execution |
@@ -123,13 +126,13 @@ The code requires Python ≥ 3.11 and the following packages:
 Install with pip:
 
 ```bash
-pip install numpy matplotlib numba scipy jupyter
+pip install numpy matplotlib mplhep numba scipy jupyter
 ```
 
 or with conda:
 
 ```bash
-conda install numpy matplotlib numba scipy jupyter
+conda install numpy matplotlib mplhep numba scipy jupyter
 ```
 
 > **Note:** The notebook kernel metadata may use the display name `torch`, but no PyTorch dependency is required.
@@ -151,7 +154,7 @@ conda install numpy matplotlib numba scipy jupyter
 
    > The cells are stateful. Later analysis cells depend on variables produced by earlier configuration and computation cells, so running them out of order will raise `NameError`.
 
-For quick exploratory runs, reduce the grid sizes in the configuration cell before running the expensive selected-plot and sweep cells.
+For quick exploratory runs, reduce the grid sizes in the configuration cell before running the expensive sweep cell.
 
 ---
 
@@ -161,19 +164,16 @@ All tuneable parameters live in the **configuration cell** near the top of the n
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `num_threads` | `os.cpu_count() or 32` | Base Numba thread count |
+| `total_cpus` | `32` | Total CPU threads used by notebook and workers |
 | `n_w0` | `5_000` | Grid density along Re ω; major cost driver |
-| `w0_min / w0_max` | `-5 / 5` | Real-axis scan range |
-| `w0_imag_values` | `linspace(10.0, 10.1, 50)` | Imaginary starting lines |
+| `w0_real_arr_by_a` | from `output_w_range(a_values)` | Coupling-dependent real-axis scan range |
+| `w0_imag_values` | `linspace(10.0, 10.05, 50)` | Imaginary starting lines |
 | `a_values` | `linspace(0.01, 10.0, 50)` plus `selected_a_values` | Coupling values for the parameter sweep |
 | `m` | `0.05` | Imaginary step per iteration |
 | `iter_range` | `20` | Total imaginary range traversed (`n_step = iter_range/m + 1`) |
-| `scan_stride` | `1` | Sweep subsampling factor; `1` is full accuracy |
-| `selected_n_jobs` | `min(len(selected_a_values), 4)` | Parallel selected-plot worker count |
 | `sweep_n_jobs` | `min(len(a_values), 8)` | Parallel sweep worker count |
+| `sweep_num_threads_per_job` | `4` | Numba threads assigned to each sweep worker |
 | `plot_log_vmin / plot_log_vmax` | `-1.3 / 0.3` | Fixed color range for log-scale pole heatmaps |
-| `save_sweep_scan_outputs` | `True` | Save heatmap-ready sweep arrays and pole data for later replotting |
-| `save_sweep_scan_a_values` | `selected_a_values` | Which sweep scans are saved as `.npz`; use `None` to save every scanned `a` |
 
 **For a quick exploratory run**, reduce `n_w0` to ~500, reduce `w0_imag_values`, and set `a_values = np.linspace(0.01, 10.0, 5)` before running the full production sweep.
 
@@ -181,34 +181,52 @@ All tuneable parameters live in the **configuration cell** near the top of the n
 
 ## Generated Outputs
 
-The notebook writes generated artifacts to ignored local directories:
+The notebook writes generated artifacts to local output directories:
 
 | Path | Contents |
 |------|----------|
-| `.worker_results/` | Worker scratch arrays, saved sweep grids, and heatmap-ready `.npz` files |
-| `figures/` | Generated PDF figures for selected heatmaps, pole candidates, decay fits, and sweep fits |
+| `.worker_results/` | Ignored worker scratch arrays and compressed full-grid sweep `.npz` files |
+| `figures/` | Tracked generated PDF figures for heatmaps, pole diagnostics, decay fits, and sweep fits |
 
-Saved full-accuracy sweep scans can be large. Use `save_sweep_scan_a_values = selected_a_values` to keep only the representative scans, or `None` to save every scanned `a` value.
+The sweep always uses the full grid and saves a compressed raw `.npz` file for every scanned `a` value. These files can be large for production grids.
+
+### Saved Sweep Scan Format
+
+Each `.worker_results/sweep_scan_a_<value>.npz` file stores the raw full-grid data needed to replot a sweep result without rerunning the recurrence:
+
+| Key | Meaning |
+|-----|---------|
+| `a_value` | Coupling value for this sweep scan |
+| `scan_w0_arr` | Flattened complex starting grid `omega_0` |
+| `scan_log_abs_g` | `log10(abs(G))` values with shape `(len(scan_w0_arr), n_step)` |
+| `pole_w` | Detected pole-candidate locations in the complex `omega` plane |
+| `gamma`, `gamma_err` | Decay-rate estimate and fit uncertainty for this `a` |
+| `n_poles` | Number of detected pole candidates |
+| `m`, `n_step` | Imaginary-axis step size and number of recurrence steps |
+
+The notebook helper `sweep_scan_plot_points(data, xlim=None, ylim=None)` reconstructs plotting coordinates from this format. It infers the original `(imaginary line, real point)` grid from `scan_w0_arr`, computes `x = Re(omega)`, computes `y = Im(omega_0) - m * step`, selects optional `xlim`/`ylim` windows, and returns finite flattened `x`, `y`, `z` arrays for scatter-style heatmap plotting.
 
 ### Figure Descriptions
 
 All figures are written as PDF files to the `figures/` directory. The four representative coupling values used in per-*a* figures are *a* = 0.01, 0.1, 1, and 10.
 
+The current notebook regenerates `w0_starting_lines.pdf`, `decay_fit_a_1.pdf`, `gamma_vs_a_power_law_fit.pdf`, and `sweep_pole_heatmap_a_<value>.pdf`. The tracked `g_heatmap_a_<value>.pdf` and `pole_candidates_a_<value>.pdf` files are retained diagnostic figures from the same analysis workflow.
+
 #### `w0_starting_lines.pdf`
 
-Scatter plot of the initial conditions in the complex *ω*-plane. Each horizontal line corresponds to one of the 50 imaginary starting values (Im(*ω*₀) ∈ [10.0, 10.1]), drawn across the full real-axis scan range. This figure serves as a visual check that the starting grid is populated as intended before the recurrence is run.
+Scatter plot of the initial conditions in the complex *ω*-plane. Each horizontal line corresponds to one of the 50 imaginary starting values (Im(*ω*₀) ∈ [10.0, 10.05]), drawn across the representative real-axis scan range. This figure serves as a visual check that the starting grid is populated as intended before the recurrence is run.
 
 #### `g_heatmap_a_<value>.pdf`
 
-Four 2D heatmaps (one per representative *a* value) showing Re(*G*) in the complex *ω*-plane after the full recurrence iteration. The *x*-axis is Re(*ω*) and the *y*-axis is Im(*ω*). Colors use a diverging `coolwarm` palette symmetric around zero and clipped at the 98th percentile of |Re(*G*)|. Narrow streaks of large positive or negative Re(*G*) indicate the locations of quasi-normal-mode poles. Axis limits shrink with *a* to keep the dominant pole structure in view.
+Diagnostic heatmaps showing Re(*G*) in the complex *ω*-plane for representative coupling values. These tracked figures are useful for checking the raw real part of the iterated Green's function before reducing the data to log-scale pole candidates.
 
 #### `pole_candidates_a_<value>.pdf`
 
-Four log-scale heatmaps (one per representative *a* value) of log₁₀|*G*| in the complex *ω*-plane using the `magma` colormap. Detected pole candidates — prominent local maxima that stand out above a rolling background — are overlaid as cyan open circles. These figures are produced at full grid resolution from the selected runs and confirm that the automatic peak-finding algorithm captures the visually apparent poles.
+Diagnostic log-scale heatmaps of log₁₀|*G*| with detected pole candidates overlaid as cyan open circles. These figures show the peak-finding output directly on the computed Green's-function landscape.
 
 #### `sweep_pole_heatmap_a_<value>.pdf`
 
-Four log-scale heatmaps (one per representative *a* value) reconstructed from the saved `.npz` sweep-scan files in `.worker_results/`. The layout is the same as the `pole_candidates` figures (log₁₀|*G*| background with cyan pole markers), but the color range for each panel is fixed independently to best expose the pole structure at that coupling. These figures are suitable for publication-quality inspection without re-running the expensive sweep.
+Log-scale heatmaps reconstructed from the saved `.npz` sweep-scan files in `.worker_results/`. The plotted grid is rebuilt directly from the saved full-grid iteration data, and detected pole candidates are overlaid as cyan open circles. The current notebook applies per-coupling plot windows and color limits for the representative values.
 
 #### `decay_fit_a_1.pdf`
 
