@@ -123,6 +123,14 @@ The code requires Python ≥ 3.11 and the following packages:
 | `scipy` | Peak detection and curve fitting |
 | `jupyter` | Notebook execution |
 
+Create and activate a virtual environment (recommended):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
 Install with pip:
 
 ```bash
@@ -135,7 +143,7 @@ or with conda:
 conda install numpy matplotlib mplhep numba scipy jupyter
 ```
 
-> **Note:** The notebook kernel metadata may use the display name `torch`, but no PyTorch dependency is required.
+> **Note:** The notebook uses the standard `python3` kernel. No PyTorch dependency is required.
 
 ---
 
