@@ -55,8 +55,6 @@ There is no dependency manifest in this repository. Install the runtime packages
 pip install numpy matplotlib mplhep numba scipy jupyter
 ```
 
-The notebook kernelspec may display as `torch`, but the kernel name is `python3` and PyTorch is not used.
-
 ## Usage
 
 Open the notebook and run it from top to bottom:
