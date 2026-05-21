@@ -1,11 +1,10 @@
 """Numerical, fitting, plotting, and worker helpers for the Green's-function notebook."""
 
-import gc
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from numba import get_num_threads, njit, prange, set_num_threads
+from numba import njit, prange, set_num_threads
 from scipy.ndimage import maximum_filter, median_filter
 from scipy.optimize import curve_fit
 
@@ -17,7 +16,7 @@ from scipy.optimize import curve_fit
 @njit(parallel=True)
 def log_abs_g_iterator(w0_arr, a, eps, m, max_iter, denom_floor=1e-12, g_abs_max=1e12):
     """Iterate the recurrence and return log10(abs(G)) for every starting point."""
-    n_w = len(w0_arr)
+    n_w = len(w0_arr) # for a specific a, iterate all imaginary (vertical) and real (horizontal) starting points
     log_abs_g = np.empty((n_w, max_iter), dtype=np.float64)
     tiny = np.finfo(np.float64).tiny
 
@@ -27,7 +26,7 @@ def log_abs_g_iterator(w0_arr, a, eps, m, max_iter, denom_floor=1e-12, g_abs_max
         g_abs = abs(g)
         log_abs_g[j, 0] = np.log10(max(g_abs, tiny)) if np.isfinite(g_abs) else np.nan
 
-        for i in range(1, max_iter):
+        for i in range(1, max_iter): # depending on the previous point (cannot use prange here)
             g_abs = abs(g)
             denom = 1j * a * g - 1j * w
             denom_abs = abs(denom)
@@ -47,7 +46,7 @@ def log_abs_g_iterator(w0_arr, a, eps, m, max_iter, denom_floor=1e-12, g_abs_max
             g_abs = abs(g)
             log_abs_g[j, i] = np.log10(max(g_abs, tiny)) if np.isfinite(g_abs) else np.nan
 
-    return log_abs_g
+    return log_abs_g # w/ shape (num of w_real * num of w_imag, max_iter)
 
 
 # -----------------------------------------------------------------------------
@@ -62,11 +61,11 @@ def pole_detection_config(sensitivity):
         "background_window": 31 if sensitivity < 0.25 else 21 if sensitivity < 0.65 else 15,
         "strength_percentile": 99.3 - 2.3 * sensitivity,
         "prominence_percentile": 99.0 - 4.0 * sensitivity,
-        "min_separation": 0.12 - 0.08 * sensitivity,
+        "min_separation": np.clip(0.24 - 0.28 * sensitivity, 0.06, 0.24),
     }
 
 
-def pole_sensitivity_for_a(a_value, low_max=0.5, high_min=3.0, low=0.85, mid=0.5, high=0.15):
+def pole_sensitivity_for_a(a_value, low_max=0.5, high_min=3.0, low=0.6, mid=0.1, high=0.001):
     """Return the piecewise pole-detection sensitivity for a coupling value."""
     if a_value <= low_max:
         return low
@@ -75,7 +74,7 @@ def pole_sensitivity_for_a(a_value, low_max=0.5, high_min=3.0, low=0.85, mid=0.5
     return high
 
 
-def pole_config_for_a(a_value, low_max=0.5, high_min=3.0, low=0.85, mid=0.5, high=0.15):
+def pole_config_for_a(a_value, low_max=0.5, high_min=3.0, low=0.6, mid=0.1, high=0.001):
     """Build a pole-detection config for a coupling value."""
     return pole_detection_config(pole_sensitivity_for_a(a_value, low_max, high_min, low, mid, high))
 
@@ -83,43 +82,94 @@ def pole_config_for_a(a_value, low_max=0.5, high_min=3.0, low=0.85, mid=0.5, hig
 def pole_config_for_a_from_config(a_value, config):
     """Build a pole-detection config from the notebook/worker config mapping."""
     return pole_config_for_a(
-        a_value,
+        a_value, # split into 3 parts for different sensitivity
+        # splitting points
         config["low_sensitivity_max_a"],
         config["high_sensitivity_min_a"],
+        # three sensitivity levels
         config["low_a_pole_sensitivity"],
         config["mid_a_pole_sensitivity"],
         config["high_a_pole_sensitivity"],
     )
 
 
-def find_poles_from_log_abs_g(log_abs_g, w0_arr, m, config):
+def find_poles_from_log_abs_g(log_abs_g, w0_arr, m, config, n_imag, n_real):
     """Find prominent local maxima in a log10(abs(G)) iteration grid."""
-    finite = np.isfinite(log_abs_g)
+    n_step = log_abs_g.shape[1]
+
+    # recover the original 2D starting grid structure:
+    # log_abs_g: (n_imag * n_real, n_step) -> (n_imag, n_real, n_step)
+    # w0_arr:    (n_imag * n_real,)        -> (n_imag, n_real)
+    log_abs_g_by_start_line = log_abs_g.reshape(n_imag, n_real, n_step)
+    w0_by_start_line = w0_arr.reshape(n_imag, n_real)
+
+    # Starting lines are fine offsets along Im(omega), not a separate physical axis.
+    # Combine starting-line index and recurrence step into one physical Im(omega) image axis.
+    log_abs_g_image = np.transpose(log_abs_g_by_start_line, (2, 0, 1)).reshape(n_step * n_imag, n_real)
+    omega_image = (w0_by_start_line[None, :, :] - 1j * m * np.arange(n_step)[:, None, None]).reshape(
+        n_step * n_imag,
+        n_real,
+    )
+    imag_order = np.argsort(omega_image[:, 0].imag)
+    log_abs_g_image = log_abs_g_image[imag_order]
+    omega_image = omega_image[imag_order]
+
+    finite = np.isfinite(log_abs_g_image)
     if not np.any(finite):
         return np.array([], dtype=complex)
 
-    finite_floor = np.nanmin(log_abs_g) - 1.0
-    filtered_log_abs_g = np.where(np.isfinite(log_abs_g), log_abs_g, finite_floor)
-    local_max = filtered_log_abs_g == maximum_filter(filtered_log_abs_g, size=config["peak_window"])
-    local_background = median_filter(filtered_log_abs_g, size=config["background_window"])
-    prominence = filtered_log_abs_g - local_background
+    # maximum_filter and median_filter do not handle NaN well!!
+    finite_floor = np.nanmin(log_abs_g_image[finite]) - 1.0
+    finite_log_abs_g_image = np.where(finite, log_abs_g_image, finite_floor)
 
-    strength_cutoff = np.nanpercentile(log_abs_g, config["strength_percentile"])
-    prominence_cutoff = np.nanpercentile(prominence, config["prominence_percentile"])
-    is_peak = finite & local_max & (log_abs_g > strength_cutoff) & (prominence > prominence_cutoff)
+    # maximum value in a windows of nighborhood
+    is_local_max = finite_log_abs_g_image == maximum_filter(
+        finite_log_abs_g_image,
+        size=(config["peak_window"], config["peak_window"]),
+    )
 
-    candidate_i, candidate_j = np.where(is_peak)
-    candidate_w = w0_arr[candidate_i] - 1j * m * candidate_j
-    candidate_strength = log_abs_g[candidate_i, candidate_j]
-    order = np.argsort(candidate_strength)[::-1]
+    # estimate what the local non-peak baseline looks like
+    local_baseline = median_filter(
+        finite_log_abs_g_image,
+        size=(config["background_window"], config["background_window"]),
+    )
 
-    selected_w = []
-    for idx in order:
-        w = candidate_w[idx]
-        if all(abs(w - kept_w) >= config["min_separation"] for kept_w in selected_w):
-            selected_w.append(w)
+    # identify sharp peaks that stand out above the local background
+    peak_prominence = finite_log_abs_g_image - local_baseline
 
-    return np.array(selected_w, dtype=complex)
+    # the poles need to be large enough
+    strength_threshold = np.nanpercentile(
+        log_abs_g_image[finite],
+        config["strength_percentile"],
+    )
+
+    # the poles need to be sharp enough
+    prominence_threshold = np.nanpercentile(
+        peak_prominence[finite],
+        config["prominence_percentile"],
+    )
+
+    is_pole_candidate = (
+        finite
+        & is_local_max
+        & (log_abs_g_image > strength_threshold)
+        & (peak_prominence > prominence_threshold)
+    )
+
+    candidate_row, candidate_col = np.where(is_pole_candidate)
+
+    candidate_omega = omega_image[candidate_row, candidate_col]
+    candidate_log_abs_g = log_abs_g_image[candidate_row, candidate_col]
+    candidate_prominence = peak_prominence[candidate_row, candidate_col]
+    strongest_first = np.lexsort((candidate_log_abs_g, candidate_prominence))[::-1] # first sort by strength, then by prominence, and reverse for strongest first
+    # the selected poles need to be separated enough in the complex plane
+    selected_poles = []
+    for idx in strongest_first:
+        pole = candidate_omega[idx]
+        if all(abs(pole - kept_pole) >= config["min_separation"] for kept_pole in selected_poles):
+            selected_poles.append(pole)
+
+    return np.array(selected_poles, dtype=complex)
 
 
 # -----------------------------------------------------------------------------
@@ -155,7 +205,7 @@ def fit_gamma_from_poles(pole_w, t_max=20, tor=-1e-2):
         maxfev=10_000,
     )
     gamma = params[1]
-    gamma_err = np.sqrt(covariance[1, 1])
+    gamma_err = np.sqrt(covariance[1, 1]) # sqrt(var(gamma, gamma))
     return gamma, gamma_err, time, decay_curves, exp_decay(time, *params)
 
 
@@ -174,6 +224,7 @@ def fit_power_law(a_values, gamma_values, gamma_errors):
     use_weights = np.all(np.isfinite(log_gamma_err) & (log_gamma_err > 0))
     kwargs = {"sigma": log_gamma_err, "absolute_sigma": True} if use_weights else {}
 
+    # log-log is a straight line
     params, covariance = curve_fit(
         lambda log_a, log_C, x: log_C + x * log_a,
         log_a,
@@ -198,12 +249,24 @@ def power_law(a, C, x):
 # Sweep computation and file naming
 
 
-def compute_sweep_scan_for_a(a_value, scan_w0_arr, config, eps, m, n_step, denom_floor, g_abs_max, threads=None):
+def compute_sweep_scan_for_a(
+    a_value,
+    scan_w0_arr,
+    config,
+    eps,
+    m,
+    n_step,
+    denom_floor,
+    g_abs_max,
+    n_imag,
+    n_real,
+    threads=None,
+):
     """Compute one full-grid sweep scan and its decay-rate estimate."""
     if threads is not None:
         set_num_threads(threads)
     scan_log_abs_g = log_abs_g_iterator(scan_w0_arr, a_value, eps, m, n_step, denom_floor, g_abs_max)
-    scan_pole_w = find_poles_from_log_abs_g(scan_log_abs_g, scan_w0_arr, m, config)
+    scan_pole_w = find_poles_from_log_abs_g(scan_log_abs_g, scan_w0_arr, m, config, n_imag, n_real)
     gamma, gamma_err, _, _, _ = fit_gamma_from_poles(scan_pole_w)
     return gamma, gamma_err, len(scan_pole_w), scan_log_abs_g, scan_pole_w
 
@@ -218,15 +281,48 @@ def sweep_scan_filename(a_value):
     return f"sweep_scan_a_{format_a_for_filename(a_value)}.npz"
 
 
-def load_w0_arr_for_job(job):
-    """Load and flatten the starting-frequency grid assigned to a worker job."""
-    grid_dir = Path(job["grid_dir"])
-    index = job["index"]
-    w0_real_arr_by_a = np.load(grid_dir / "w0_real_arr_by_a.npy", mmap_mode="r")
-    w0_imag_values = np.load(grid_dir / "w0_imag_values.npy", mmap_mode="r")
-    w0_real_arr = np.asarray(w0_real_arr_by_a[index])
-    w0_start_lines = w0_real_arr[None, :] + 1j * np.asarray(w0_imag_values)[:, None]
-    return w0_start_lines.ravel()
+def compute_and_save_sweep_scan(
+    a_value,
+    scan_w0_arr,
+    config,
+    eps,
+    m,
+    n_step,
+    denom_floor,
+    g_abs_max,
+    n_imag,
+    n_real,
+    output_dir,
+    threads=None,
+):
+    """Compute one full-grid sweep scan, save it, and return summary values."""
+    gamma, gamma_err, n_poles, scan_log_abs_g, scan_pole_w = compute_sweep_scan_for_a(
+        a_value,
+        scan_w0_arr,
+        config,
+        eps,
+        m,
+        n_step,
+        denom_floor,
+        g_abs_max,
+        n_imag,
+        n_real,
+        threads=threads,
+    )
+    scan_path = Path(output_dir) / sweep_scan_filename(a_value)
+    np.savez_compressed(
+        scan_path,
+        a_value=a_value,
+        scan_w0_arr=scan_w0_arr,
+        scan_log_abs_g=scan_log_abs_g,
+        pole_w=scan_pole_w,
+        gamma=gamma,
+        gamma_err=gamma_err,
+        n_poles=n_poles,
+        m=m,
+        n_step=n_step,
+    )
+    return gamma, gamma_err, n_poles, scan_path
 
 
 # -----------------------------------------------------------------------------
@@ -289,50 +385,3 @@ def plot_a_gamma_fit(a_values, gamma_values, gamma_errors, C, x, fit_a, save_pat
     save_figure(fig, save_path)
     plt.show()
     plt.close(fig)
-
-
-# -----------------------------------------------------------------------------
-# Process-pool workers
-
-
-def run_sweep_job(job):
-    """Worker entry point for one coupling value in the full-grid sweep."""
-    config = job["config"]
-    a_value = job["a"]
-    scan_w0_arr = load_w0_arr_for_job(job)
-    pole_config = pole_config_for_a_from_config(a_value, config)
-    gamma, gamma_err, n_poles, scan_log_abs_g, scan_pole_w = compute_sweep_scan_for_a(
-        a_value,
-        scan_w0_arr,
-        pole_config,
-        config["eps"],
-        config["m"],
-        config["n_step"],
-        config["denom_floor"],
-        config["g_abs_max"],
-        threads=job["threads"],
-    )
-    scan_path = Path(job["scan_output_dir"]) / sweep_scan_filename(a_value)
-    np.savez_compressed(
-        scan_path,
-        a_value=a_value,
-        scan_w0_arr=scan_w0_arr,
-        scan_log_abs_g=scan_log_abs_g,
-        pole_w=scan_pole_w,
-        gamma=gamma,
-        gamma_err=gamma_err,
-        n_poles=n_poles,
-        m=config["m"],
-        n_step=config["n_step"],
-    )
-    del scan_log_abs_g
-    gc.collect()
-    return {
-        "idx": job["index"],
-        "a": a_value,
-        "gamma": gamma,
-        "gamma_err": gamma_err,
-        "n_poles": n_poles,
-        "threads": get_num_threads(),
-        "scan_path": str(scan_path),
-    }
