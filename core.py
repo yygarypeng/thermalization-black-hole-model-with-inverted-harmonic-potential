@@ -49,6 +49,62 @@ def log_abs_g_iterator(w0_arr, a, eps, m, max_iter, denom_floor=1e-12, g_abs_max
     return log_abs_g # w/ shape (num of w_real * num of w_imag, max_iter)
 
 
+@njit(parallel=True)
+def g_iterator_selected_image_rows(
+    w0_real_arr,
+    w0_imag_values,
+    selected_row_lookup,
+    n_output_rows,
+    a,
+    eps,
+    m,
+    max_iter,
+    denom_floor=1e-12,
+    g_abs_max=1e12,
+):
+    """Iterate G and keep only selected physical image rows for CSV export."""
+    n_real = len(w0_real_arr)
+    n_imag = len(w0_imag_values)
+    g_out = np.empty((n_output_rows, n_real), dtype=np.complex128)
+    nan_complex = np.nan + 1j * np.nan
+
+    for idx in prange(n_output_rows * n_real):
+        row = idx // n_real
+        real_idx = idx % n_real
+        g_out[row, real_idx] = nan_complex
+
+    for start_idx in prange(n_imag * n_real):
+        imag_idx = start_idx // n_real
+        real_idx = start_idx % n_real
+        w = w0_real_arr[real_idx] + 1j * w0_imag_values[imag_idx]
+        g = 1j / (w + 1j * eps)
+
+        row = selected_row_lookup[0, imag_idx]
+        if row >= 0:
+            g_out[row, real_idx] = g
+
+        for step in range(1, max_iter):
+            g_abs = abs(g)
+            denom = 1j * a * g - 1j * w
+            denom_abs = abs(denom)
+
+            if (
+                not np.isfinite(g_abs)
+                or not np.isfinite(denom_abs)
+                or denom_abs < denom_floor
+                or g_abs > g_abs_max
+            ):
+                break
+
+            g = 1 / denom
+            w = w - 1j * m
+            row = selected_row_lookup[step, imag_idx]
+            if row >= 0:
+                g_out[row, real_idx] = g
+
+    return g_out
+
+
 # -----------------------------------------------------------------------------
 # Pole detection
 
@@ -377,6 +433,8 @@ def plot_a_gamma_fit(a_values, gamma_values, gamma_errors, C, x, fit_a, save_pat
     if np.isfinite(C) and np.isfinite(x) and len(fit_a):
         a_fit = np.linspace(fit_a.min(), fit_a.max(), 500)
         ax.plot(a_fit, power_law(a_fit, C, x), "--", label=rf"fit: $\gamma = {C:.3f} a^{{{x:.3f}}}$")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
     ax.set_xlabel("a")
     ax.set_ylabel("fitted gamma")
     ax.set_title("a vs fitted gamma")
