@@ -426,15 +426,16 @@ def plot_decay_fit(gamma, time, decay_curves, fit_curve, save_path=None):
     plt.close(fig)
 
 
-def plot_a_gamma_fit(a_values, gamma_values, gamma_errors, C, x, fit_a, save_path=None):
+def plot_a_gamma_fit(a_values, gamma_values, gamma_errors, C, x, fit_a, log=True, save_path=None):
     """Plot fitted gamma values against coupling and overlay the power-law fit."""
     fig, ax = plt.subplots(constrained_layout=True)
     ax.errorbar(a_values, gamma_values, yerr=gamma_errors, fmt=".", linestyle="none", capsize=4, label="data")
     if np.isfinite(C) and np.isfinite(x) and len(fit_a):
         a_fit = np.linspace(fit_a.min(), fit_a.max(), 500)
         ax.plot(a_fit, power_law(a_fit, C, x), "--", label=rf"fit: $\gamma = {C:.3f} a^{{{x:.3f}}}$")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
+    if log:
+        ax.set_xscale("log")
+        ax.set_yscale("log")
     ax.set_xlabel("a")
     ax.set_ylabel("fitted gamma")
     ax.set_title("a vs fitted gamma")
