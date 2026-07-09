@@ -6,7 +6,7 @@
 
 Research code for studying thermalization in a black-hole-inspired model with an inverted harmonic potential. The workflow computes an iterated Green's function over a complex-frequency grid, detects pole candidates, estimates a decay rate, and fits the decay-rate dependence on the coupling parameter `a`.
 
-This is a work-in-progress thesis repository. The notebook is the source of truth for the current analysis run.
+This repository is based on Feng-Ming Ho (Amigo)'s [thesis](https://etd.lib.nthu.edu.tw/thesis/detail/7cd9348bde8814af45643b026048dc47/?seq=1).
 
 ## Repository Layout
 
